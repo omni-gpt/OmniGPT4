@@ -19,7 +19,6 @@ from transformers.modeling_outputs import (
     Seq2SeqLMOutput,
 )
 from transformers.models.blip_2.modeling_blip_2 import Blip2Encoder, Blip2VisionEmbeddings
-# from transformers import Blip2ForConditionalGeneration, Blip2Processor, BlipImageProcessor
 from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
@@ -120,7 +119,7 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
             language_model = AutoModelForCausalLM.from_config(config.text_config)
         else:
             language_model = AutoModelForSeq2SeqLM.from_config(config.text_config)
-        self.language_model = language_model
+        self.language_model: PreTrainedModel = language_model
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -180,47 +179,56 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         labels: Optional[torch.LongTensor] = None,
         return_dict: Optional[bool] = None,
+        freeze_visual_model: bool = True,
+        freeze_qformer: bool = True,
+        freeze_language_model: bool = True,
     ):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # step 1: forward the images through the vision encoder,
         # to get image embeddings of shape (batch_size, seq_len, hidden_size)
-        vision_outputs = self.vision_model(
-            pixel_values=pixel_values,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
+        with torch.set_grad_enabled(not freeze_visual_model):
+            vision_outputs = self.vision_model(
+                pixel_values=pixel_values,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
         image_embeds = vision_outputs[0]
 
         # step 2: forward the query tokens through the QFormer, using the image embeddings for cross-attention
         image_attention_mask = torch.ones(image_embeds.size()[:-1], dtype=torch.long, device=image_embeds.device)
 
-        query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
-        query_outputs = self.qformer(
-            query_embeds=query_tokens,
-            encoder_hidden_states=image_embeds,
-            encoder_attention_mask=image_attention_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
+        with torch.set_grad_enabled(not freeze_qformer):
+            query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+            query_outputs = self.qformer(
+                query_embeds=query_tokens,
+                encoder_hidden_states=image_embeds,
+                encoder_attention_mask=image_attention_mask,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
         query_output = query_outputs[0]
 
         # step 3: use the language model, conditioned on the query outputs and the prompt
         image_embeds_for_lm = self.language_projection(query_output)
+
+        # with torch.set_grad_enabled(not freeze_language_model):
         inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
-        inputs_embeds = inputs_embeds.to(image_embeds_for_lm.device)
+        inputs_embeds = inputs_embeds.to(image_embeds_for_lm.dtype)
 
         # replace the [IMG] token with the image embeddings
-        vision_token_idxs = vision_token_positions[:, 0] * inputs_embeds.shape[1] + vision_token_positions[:, 1]
+        vision_token_idxs = vision_token_positions.view(-1)
         inputs_embeds_shape = inputs_embeds.shape
-        inputs_embeds.view(-1, *inputs_embeds_shape[2:])[vision_token_idxs] = image_embeds_for_lm
+        inputs_embeds.view(-1, *inputs_embeds_shape[2:])[
+            vision_token_idxs
+        ] = image_embeds_for_lm.flatten(0, 1)
         inputs_embeds = inputs_embeds.view(*inputs_embeds_shape)
 
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
-        attention_mask = attention_mask.to(image_embeds_for_lm.device)
+        attention_mask = attention_mask.to(image_embeds_for_lm.dtype)
 
         if self.config.use_decoder_only_language_model:
             outputs = self.language_model(
@@ -234,17 +242,17 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
             loss = None
             # we compute the loss here since we need to take into account the sequence length of the query embeds
             if labels is not None:
-                labels = labels.to(logits.device)
-                logits = logits[:, -labels.size(1) :, :]
+                logits = logits[:, -labels.size(1):, :]
                 # Shift so that tokens < n predict n
-                shift_logits = logits[..., :-1, :].contiguous()
-                shift_labels = labels[..., 1:].contiguous().to(logits.device)
+                shift_logits = logits[..., :-1, :]
+                shift_labels = labels[..., 1:]
 
                 # Flatten the tokens
                 loss = F.cross_entropy(
-                    shift_logits.view(-1, self.config.text_config.vocab_size),
-                    shift_labels.view(-1),
+                    shift_logits.reshape(-1, self.config.text_config.vocab_size),
+                    shift_labels.reshape(-1),
                     reduction="mean",
+                    ignore_index=-100,
                 )
         else:
             outputs = self.language_model(
@@ -275,7 +283,7 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
     @torch.no_grad()
     def generate(
         self,
-        input_ids: Optional[torch.FloatTensor] = None,
+        input_ids: torch.FloatTensor,
         pixel_values: Optional[torch.FloatTensor] = None,
         vision_token_positions: Optional[torch.LongTensor] = None,  # TODO: find a better name
         attention_mask: Optional[torch.LongTensor] = None,
@@ -299,7 +307,6 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
             # preprocess for `accelerate`
             self._preprocess_accelerate()
 
-        batch_size = pixel_values.shape[0]
         image_embeds = self.vision_model(pixel_values, return_dict=True).last_hidden_state
         image_attention_mask = torch.ones(image_embeds.size()[:-1], dtype=torch.long, device=image_embeds.device)
 
@@ -312,23 +319,22 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
         )
         query_output = query_outputs.last_hidden_state
 
-        language_model_inputs = self.language_projection(query_output)
-        language_attention_mask = torch.ones(
-            language_model_inputs.size()[:-1], dtype=torch.long, device=language_model_inputs.device
-        )
-        if input_ids is None:
-            input_ids = (
-                torch.LongTensor([[self.config.text_config.bos_token_id]])
-                .repeat(batch_size, 1)
-                .to(image_embeds.device)
-            )
+        image_embeds_for_lm = self.language_projection(query_output)
+
+        inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
+        inputs_embeds = inputs_embeds.to(image_embeds_for_lm.dtype)
+
+        # replace the [IMG] token with the image embeddings
+        vision_token_idxs = vision_token_positions.view(-1)
+        inputs_embeds_shape = inputs_embeds.shape
+        inputs_embeds.view(-1, *inputs_embeds_shape[2:])[
+            vision_token_idxs
+        ] = image_embeds_for_lm.flatten(0, 1)
+        inputs_embeds = inputs_embeds.view(*inputs_embeds_shape)
+
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
-        attention_mask = torch.cat([language_attention_mask, attention_mask.to(language_attention_mask.device)], dim=1)
-
-        # concatenate query embeddings with prompt embeddings
-        inputs_embeds = self.get_input_embeddings()(input_ids)
-        inputs_embeds = torch.cat([language_model_inputs, inputs_embeds.to(language_model_inputs.device)], dim=1)
+        attention_mask = attention_mask.to(image_embeds_for_lm.dtype)
 
         outputs = self.language_model.generate(
             inputs_embeds=inputs_embeds,
