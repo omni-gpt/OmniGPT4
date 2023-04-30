@@ -46,15 +46,23 @@ def _load_pretrained_model_state_dict(
             for k in f.keys():
                 state_dict[k] = f.get_tensor(k)
     else:
-        vicuna = LlamaForCausalLM.from_pretrained(language_model_name_or_path)
-        for key, val in vicuna.state_dict().items():
+        llm = LlamaForCausalLM.from_pretrained(
+            language_model_name_or_path,
+            torch_dtype=torch.float16,
+        )
+        for key, val in llm.state_dict().items():
             state_dict["language_model." + key] = val
+        print("LLM weights loaded.")
 
-        blip2 = Blip2ForConditionalGeneration.from_pretrained(visual_model_name_or_path)
+        blip2 = Blip2ForConditionalGeneration.from_pretrained(
+            visual_model_name_or_path,
+            torch_dtype=torch.float16,
+        )
         for key, val in blip2.state_dict().items():
             if key.startswith("language_"):
                 continue
             state_dict[key] = val
+        print("BLIP2 weights loaded.")
 
         if is_global_zero:
             save_file(state_dict, cache_path)
@@ -96,6 +104,7 @@ class OmniGPT4(pl.LightningModule):
         freeze_language_model: bool = True,
         cache_root_path: Optional[str] = None,
         optimizer_config: Optional[OptimizerConfig] = None,
+        attention_type: str = "vanilla",
     ) -> None:
         super().__init__()
 
@@ -114,6 +123,8 @@ class OmniGPT4(pl.LightningModule):
             qformer_config=Blip2QFormerConfig.from_pretrained(visual_model_name_or_path),
             text_config=LlamaConfig.from_pretrained(language_model_name_or_path),
         )
+        config.vision_config.layer_norm_eps = 1e-6 # following the original EVA-ViT config
+        config.vision_config.attention_type = attention_type
 
         state_dict = _load_pretrained_model_state_dict(
             language_model_name_or_path=language_model_name_or_path,
@@ -126,7 +137,9 @@ class OmniGPT4(pl.LightningModule):
             pretrained_model_name_or_path=None,
             config=config,
             state_dict=state_dict,
+            torch_dtype=torch.float16,
         )
+        self.model.language_projection = self.model.language_projection.float()
 
         if freeze_visual_model:
             for param in self.model.vision_model.parameters():

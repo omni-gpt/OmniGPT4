@@ -8,7 +8,6 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
     Blip2Config,
-    Blip2VisionModel,
     Blip2QFormerModel,
     PreTrainedModel,
 )
@@ -20,6 +19,8 @@ from transformers.modeling_outputs import (
 )
 from transformers.models.blip_2.modeling_blip_2 import Blip2Encoder, Blip2VisionEmbeddings
 from transformers.utils import logging
+
+from .blip_2 import Blip2VisionModel
 
 logger = logging.get_logger(__name__)
 
@@ -44,8 +45,7 @@ class OmniGPT4PreTrainedModel(PreTrainedModel):
         r"language_model.decoder.embed_tokens.weight",
         r"language_model.lm_head.weight",
     ]
-    _no_split_modules = ["Blip2Attention", "T5Block", "OPTDecoderLayer"]
-    _keep_in_fp32_modules = ["wo"]
+    _no_split_modules = ["Blip2Attention"]
 
     def _init_weights(self, module):
         """Initialize the weights"""

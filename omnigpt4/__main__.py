@@ -3,7 +3,7 @@ import os
 
 import lightning.pytorch as pl
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
-from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.loggers import WandbLogger, CSVLogger
 from lightning.fabric.utilities.cloud_io import get_filesystem
 
 
@@ -12,9 +12,15 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         if self.already_saved:
             return
 
-        for logger in trainer.loggers:
-            if isinstance(logger, WandbLogger):
-                log_dir = logger.experiment.dir
+        if trainer.global_rank == 0:
+            for logger in trainer.loggers:
+                if isinstance(logger, WandbLogger):
+                    log_dir = logger.experiment.dir
+                elif isinstance(logger, CSVLogger):
+                    log_dir = logger.log_dir
+        else:
+            log_dir = None
+        log_dir = trainer.strategy.broadcast(log_dir)
 
         assert log_dir is not None
         config_path = os.path.join(log_dir, self.config_filename)
