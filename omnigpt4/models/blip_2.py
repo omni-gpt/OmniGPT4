@@ -32,9 +32,15 @@ class Blip2Attention(Blip2AttentionBase):
 
         mixed_qkv = self.qkv(hidden_states)
 
-        mixed_qkv = mixed_qkv.reshape(bsz, tgt_len, 3, self.num_heads, embed_dim // self.num_heads).permute(
-            2, 0, 3, 1, 4
-        )
+        if self.config.attention_type == "xformers":
+            mixed_qkv = mixed_qkv.reshape(bsz, tgt_len, 3, self.num_heads, embed_dim // self.num_heads).permute(
+                2, 0, 1, 3, 4
+            )
+        else:
+            mixed_qkv = mixed_qkv.reshape(bsz, tgt_len, 3, self.num_heads, embed_dim // self.num_heads).permute(
+                2, 0, 3, 1, 4
+            )
+
         query_states, key_states, value_states = (
             mixed_qkv[0],
             mixed_qkv[1],
@@ -68,7 +74,8 @@ class Blip2Attention(Blip2AttentionBase):
         else:
             raise NotImplementedError(self.config.attention_type)
 
-        context_layer = context_layer.permute(0, 2, 1, 3)
+        if self.config.attention_type != "xformers":
+            context_layer = context_layer.permute(0, 2, 1, 3)
 
         new_context_layer_shape = context_layer.size()[:-2] + (self.embed_dim,)
         context_layer = context_layer.reshape(new_context_layer_shape)

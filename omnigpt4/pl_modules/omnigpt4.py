@@ -1,10 +1,11 @@
-import lightning.pytorch as pl
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple
-from lightning.pytorch.utilities.types import STEP_OUTPUT
 
 import torch
+import lightning.pytorch as pl
+from lightning.pytorch.utilities.types import STEP_OUTPUT
+from torch.optim import AdamW
 from transformers import (
     Blip2VisionConfig,
     Blip2QFormerConfig,
@@ -12,7 +13,6 @@ from transformers import (
     LlamaConfig,
     LlamaForCausalLM,
 )
-from transformers.optimization import AdamW
 from safetensors import safe_open
 from safetensors.torch import save_file
 from slugify import slugify
@@ -148,6 +148,7 @@ class OmniGPT4(pl.LightningModule):
             self.model.vision_model.train = disabled_train
 
         if freeze_qformer:
+            self.model.query_tokens.requires_grad = False
             for param in self.model.qformer.parameters():
                 param.requires_grad = False
             self.model.qformer.eval()

@@ -3,7 +3,6 @@ from typing import Any, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
@@ -237,23 +236,8 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
+                labels=labels,
             )
-            logits = outputs.logits if return_dict else outputs[0]
-            loss = None
-            # we compute the loss here since we need to take into account the sequence length of the query embeds
-            if labels is not None:
-                logits = logits[:, -labels.size(1):, :]
-                # Shift so that tokens < n predict n
-                shift_logits = logits[..., :-1, :]
-                shift_labels = labels[..., 1:]
-
-                # Flatten the tokens
-                loss = F.cross_entropy(
-                    shift_logits.reshape(-1, self.config.text_config.vocab_size),
-                    shift_labels.reshape(-1),
-                    reduction="mean",
-                    ignore_index=-100,
-                )
         else:
             outputs = self.language_model(
                 inputs_embeds=inputs_embeds,
@@ -265,8 +249,9 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
                 return_dict=return_dict,
                 labels=labels,
             )
-            loss = outputs.loss if return_dict else outputs[0]
-            logits = outputs.logits if return_dict else outputs[1]
+
+        loss = outputs.loss if return_dict else outputs[0]
+        logits = outputs.logits if return_dict else outputs[1]
 
         if not return_dict:
             output = (logits, vision_outputs, query_outputs, outputs)
