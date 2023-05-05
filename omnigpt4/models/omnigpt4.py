@@ -19,6 +19,7 @@ from transformers.modeling_outputs import (
 from transformers.models.blip_2.modeling_blip_2 import Blip2Encoder, Blip2VisionEmbeddings
 from transformers.utils import logging
 
+from omnigpt4.utils.init import no_init
 from .blip_2 import Blip2VisionModel
 
 logger = logging.get_logger(__name__)
@@ -108,17 +109,22 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
     def __init__(self, config: OmniGPT4Config):
         super().__init__(config)
 
-        self.vision_model = Blip2VisionModel(config.vision_config)
+        # TODO: add enabled flags for each component
+        with no_init():
+            self.vision_model = Blip2VisionModel(config.vision_config)
 
-        self.query_tokens = nn.Parameter(torch.zeros(1, config.num_query_tokens, config.qformer_config.hidden_size))
-        self.qformer = Blip2QFormerModel(config.qformer_config)
+        with no_init():
+            self.query_tokens = nn.Parameter(torch.zeros(1, config.num_query_tokens, config.qformer_config.hidden_size))
+            self.qformer = Blip2QFormerModel(config.qformer_config)
 
         self.language_projection = nn.Linear(config.qformer_config.hidden_size, config.text_config.hidden_size)
-        if config.use_decoder_only_language_model:
-            language_model = AutoModelForCausalLM.from_config(config.text_config)
-        else:
-            language_model = AutoModelForSeq2SeqLM.from_config(config.text_config)
-        self.language_model: PreTrainedModel = language_model
+
+        with no_init():
+            if config.use_decoder_only_language_model:
+                language_model = AutoModelForCausalLM.from_config(config.text_config)
+            else:
+                language_model = AutoModelForSeq2SeqLM.from_config(config.text_config)
+            self.language_model: PreTrainedModel = language_model
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -178,36 +184,31 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         labels: Optional[torch.LongTensor] = None,
         return_dict: Optional[bool] = None,
-        freeze_visual_model: bool = True,
-        freeze_qformer: bool = True,
-        freeze_language_model: bool = True,
     ):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # step 1: forward the images through the vision encoder,
         # to get image embeddings of shape (batch_size, seq_len, hidden_size)
-        with torch.set_grad_enabled(not freeze_visual_model):
-            vision_outputs = self.vision_model(
-                pixel_values=pixel_values,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
+        vision_outputs = self.vision_model(
+            pixel_values=pixel_values,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
         image_embeds = vision_outputs[0]
 
         # step 2: forward the query tokens through the QFormer, using the image embeddings for cross-attention
         image_attention_mask = torch.ones(image_embeds.size()[:-1], dtype=torch.long, device=image_embeds.device)
 
-        with torch.set_grad_enabled(not freeze_qformer):
-            query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
-            query_outputs = self.qformer(
-                query_embeds=query_tokens,
-                encoder_hidden_states=image_embeds,
-                encoder_attention_mask=image_attention_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
+        query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+        query_outputs = self.qformer(
+            query_embeds=query_tokens,
+            encoder_hidden_states=image_embeds,
+            encoder_attention_mask=image_attention_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
         query_output = query_outputs[0]
 
         # step 3: use the language model, conditioned on the query outputs and the prompt

@@ -1,0 +1,65 @@
+data:
+  class_path: omnigpt4.data.pl_modules.ImageTextPair
+  init_args:
+    datasets:
+      - urls:
+          - data/laion/laion_dataset/{00000..10488}.tar
+          - data/laion/laion_dataset_v1/{00000..03877}.tar
+          - data/laion/laion_dataset_v1/{00000..00988}.tar
+        sample_rate: 115
+      - urls:
+          - data/cc_sbu/cc_sbu_dataset/{00000..01255}.tar
+          - data/cc_sbu/cc_sbu_dataset_v1/{00000..00346}.tar
+          - data/cc_sbu/cc_sbu_dataset_v1/{00000..00179}.tar
+          - data/cc_sbu/cc_sbu_dataset_v1/{00000..00155}.tar
+          - data/cc_sbu/cc_sbu_dataset_v1/{00000..00145}.tar
+        sample_rate: 14
+    batch_size: 32
+    num_workers: 16
+
+model:
+  class_path: omnigpt4.pl_modules.omnigpt4.OmniGPT4
+  init_args:
+    visual_model_name_or_path: Salesforce/blip2-flan-t5-xxl
+    language_model_name_or_path: ./weights/vicuna-7b-v0
+    optimizer_config:
+      init_lr: 1e-4
+      min_lr: 8e-5
+      betas: [0.9, 0.999]
+      weight_decay: 0.05
+      norm_weight_decay: 0.0
+      num_warmup_steps: 10_000
+      warmup_init_lr: 1e-6
+    attention_type: xformers
+
+trainer:
+  devices: auto
+  strategy: deepspeed_stage_2
+  max_steps: 40_000
+  precision: 16-mixed
+
+  accumulate_grad_batches: 2
+
+  logger:
+    - class_path: omnigpt4.utils.logger.WandbLogger
+      init_args:
+        project: OmniGPT4
+        entity: sotalab
+        name: minigpt4_stage_1
+
+  callbacks:
+    - class_path: TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+    - class_path: ModelCheckpoint
+      init_args:
+        filename: "ckpt_{step:08d}"
+        auto_insert_metric_name: False
+        save_top_k: -1
+        every_n_train_steps: 10_000
+    - LearningRateMonitor
+
+  default_root_dir: wandb
+  num_sanity_val_steps: 0
+
+seed_everything: 2333

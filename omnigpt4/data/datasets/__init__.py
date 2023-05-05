@@ -1,0 +1,1 @@
+from .image_text_pair import build_image_text_pair_pipeline

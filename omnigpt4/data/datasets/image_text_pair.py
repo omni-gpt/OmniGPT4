@@ -1,13 +1,13 @@
 import re
+from itertools import chain
 from typing import List
 
-import webdataset as wds
 import torch
+import webdataset as wds
 from torchvision import transforms as T
 from torchvision.transforms.functional import InterpolationMode
 from transformers import BatchEncoding, LlamaTokenizer
-
-# TODO: merge cc_sbu and laion
+from webdataset.shardlists import expand_urls
 
 
 def text_processor(caption: str, max_words: int = 50) -> str:
@@ -32,8 +32,9 @@ def text_processor(caption: str, max_words: int = 50) -> str:
     return caption
 
 
-def build_wds_pipeline(
+def build_image_text_pair_pipeline(
     urls: List[str],
+    batch_size: int = 64,
     image_size: int = 224,
     min_scale: int = 0.5,
     max_scale: int = 1.0,
@@ -56,6 +57,7 @@ def build_wds_pipeline(
         ),
     ])
 
+    # TODO: make AutoTokenizer work
     tokenizer: LlamaTokenizer = LlamaTokenizer.from_pretrained(tokenizer_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
     bos_token_id = tokenizer.bos_token_id
@@ -130,6 +132,9 @@ def build_wds_pipeline(
             "target_ids": target_ids,
         }
 
+    urls = list(chain.from_iterable([expand_urls(url) for url in urls]))
+
+    # TODO: add cache
     return wds.DataPipeline(
         wds.ResampledShards(urls),
         wds.tarfile_to_samples(handler=wds.warn_and_continue),
@@ -138,4 +143,5 @@ def build_wds_pipeline(
         wds.to_tuple("jpg", "json", handler=wds.warn_and_continue),
         wds.map_tuple(vis_processor, handler=wds.warn_and_continue),
         wds.map(tokenize, handler=wds.warn_and_continue),
-    ), collate
+        wds.batched(batch_size, collation_fn=collate, partial=False),
+    )

@@ -18,7 +18,7 @@ from safetensors.torch import save_file
 from slugify import slugify
 
 from omnigpt4.models.omnigpt4 import OmniGPT4Config, OmniGPT4Model
-from omnigpt4.utils.optim_helpers import get_param_groups, WarmupCosineAnnealingLR
+from omnigpt4.utils.optim import get_param_groups, WarmupCosineAnnealingLR
 
 
 def _load_pretrained_model_state_dict(
@@ -46,6 +46,7 @@ def _load_pretrained_model_state_dict(
             for k in f.keys():
                 state_dict[k] = f.get_tensor(k)
     else:
+        # TODO: support AutoCausalLM
         llm = LlamaForCausalLM.from_pretrained(
             language_model_name_or_path,
             torch_dtype=torch.float16,
@@ -171,9 +172,6 @@ class OmniGPT4(pl.LightningModule):
             vision_token_positions=vision_token_positions,
             attention_mask=attention_masks,
             labels=target_ids,
-            freeze_visual_model=self.freeze_visual_model,
-            freeze_qformer=self.freeze_qformer,
-            freeze_language_model=self.freeze_language_model,
         )
         loss = outputs.loss
 

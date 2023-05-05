@@ -1,1 +1,1 @@
-from .cc_sbu import CCSBUDataModule
+from .image_text_pair import ImageTextPair
