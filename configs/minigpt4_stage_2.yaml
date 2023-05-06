@@ -6,7 +6,8 @@ data:
           - data/cc_sbu_align/wds.tar
     batch_size: 6
     num_workers: 8
-    max_tokens: 200
+    tokenizer_name_or_path: ./weights/vicuna-7b-v0
+    max_tokens: 256
     end_sym: "###"
     prompt_template: "###Human: {} ###Assistant: "
     prompts_path: data/minigpt4_align_prompts.txt
@@ -17,7 +18,7 @@ model:
     visual_model_name_or_path: Salesforce/blip2-flan-t5-xxl
     language_projection_weight_path: ./weights/language_projection_weights_checkpoints_00020000.safetensors
     language_model_name_or_path: ./weights/vicuna-7b-v0
-    attention_type: xformers
+    attention_type: torch_sdpa
     optimizer_config:
       init_lr: 3e-5
       min_lr: 1e-5

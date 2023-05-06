@@ -10,14 +10,15 @@ from transformers import (
     Blip2VisionConfig,
     Blip2QFormerConfig,
     Blip2ForConditionalGeneration,
-    LlamaConfig,
-    LlamaForCausalLM,
+    AutoConfig,
+    AutoModelForCausalLM,
 )
 from safetensors import safe_open
 from safetensors.torch import save_file
 from slugify import slugify
 
 from omnigpt4.models.omnigpt4 import OmniGPT4Config, OmniGPT4Model
+from omnigpt4.utils.attention import optimize_attention_ops
 from omnigpt4.utils.optim import get_param_groups, WarmupCosineAnnealingLR
 
 
@@ -47,7 +48,7 @@ def _load_pretrained_model_state_dict(
                 state_dict[k] = f.get_tensor(k)
     else:
         # TODO: support AutoCausalLM
-        llm = LlamaForCausalLM.from_pretrained(
+        llm = AutoModelForCausalLM.from_pretrained(
             language_model_name_or_path,
             torch_dtype=torch.float16,
         )
@@ -100,7 +101,7 @@ class OmniGPT4(pl.LightningModule):
         visual_model_name_or_path: str = "Salesforce/blip2-opt-6.7b",
         language_projection_weight_path: Optional[str] = None,
         language_model_name_or_path: str = "./weights/vicuna-7b-v1.1",
-        attention_type: str = "vanilla",
+        attention_type: str = "original",
         freeze_visual_model: bool = True,
         freeze_qformer: bool = True,
         freeze_language_model: bool = True,
@@ -122,10 +123,9 @@ class OmniGPT4(pl.LightningModule):
         config = OmniGPT4Config.from_vision_qformer_text_configs(
             vision_config=Blip2VisionConfig.from_pretrained(visual_model_name_or_path),
             qformer_config=Blip2QFormerConfig.from_pretrained(visual_model_name_or_path),
-            text_config=LlamaConfig.from_pretrained(language_model_name_or_path),
+            text_config=AutoConfig.from_pretrained(language_model_name_or_path),
         )
-        config.vision_config.layer_norm_eps = 1e-6 # following the original EVA-ViT config
-        config.vision_config.attention_type = attention_type
+        config.vision_config.layer_norm_eps = 1e-6  # following the original EVA-ViT config
 
         state_dict = _load_pretrained_model_state_dict(
             language_model_name_or_path=language_model_name_or_path,
@@ -142,6 +142,11 @@ class OmniGPT4(pl.LightningModule):
         )
         # TODO: fix this. This will round the weights to fp16, which is not what we want.
         self.model.language_projection = self.model.language_projection.float()
+
+        optimize_attention_ops(self.model, attention_type=attention_type)
+
+        self.model.vision_model = torch.compile(self.model.vision_model)
+        self.model.qformer = torch.compile(self.model.qformer)
 
         if freeze_visual_model:
             for param in self.model.vision_model.parameters():

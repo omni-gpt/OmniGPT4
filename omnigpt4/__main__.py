@@ -12,17 +12,19 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         if self.already_saved:
             return
 
+        log_dir = None
         if trainer.global_rank == 0:
             for logger in trainer.loggers:
                 if isinstance(logger, WandbLogger):
                     log_dir = logger.experiment.dir
                 elif isinstance(logger, CSVLogger):
                     log_dir = logger.log_dir
-        else:
-            log_dir = None
+
         log_dir = trainer.strategy.broadcast(log_dir)
 
-        assert log_dir is not None
+        if log_dir is None:
+            return super().setup(trainer, pl_module, stage)
+
         config_path = os.path.join(log_dir, self.config_filename)
         fs = get_filesystem(log_dir)
 

@@ -7,7 +7,7 @@ import torch
 import webdataset as wds
 from torchvision import transforms as T
 from torchvision.transforms.functional import InterpolationMode
-from transformers import BatchEncoding, LlamaTokenizer
+from transformers import AutoTokenizer, BatchEncoding, PreTrainedTokenizer
 from webdataset.shardlists import expand_urls
 
 
@@ -34,9 +34,9 @@ def build_image_text_pair_pipeline(
     image_size: int = 224,
     min_scale: int = 0.5,
     max_scale: int = 1.0,
-    max_tokens: int = 32,
+    max_tokens: int = 64,
     num_tokens_per_image: int = 32,
-    tokenizer_name_or_path: str = "./weights/vicuna-7b-v0",
+    tokenizer_name_or_path: str = "bert-base-uncased",
     end_sym: str = "\n",
     prompt_template: str = "",
     prompts_path: Optional[str] = None,
@@ -54,8 +54,9 @@ def build_image_text_pair_pipeline(
         ),
     ])
 
-    # TODO: make AutoTokenizer work
-    tokenizer: LlamaTokenizer = LlamaTokenizer.from_pretrained(tokenizer_name_or_path)
+    tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(
+        tokenizer_name_or_path, use_fast=False
+    )
     tokenizer.pad_token = tokenizer.eos_token
     bos_token_id = tokenizer.bos_token_id
     eos_token_id = tokenizer.eos_token_id
@@ -70,7 +71,7 @@ def build_image_text_pair_pipeline(
         if prompts_path is not None:
             prompt = prompt_template.format(np.random.choice(prompts))
         else:
-            prompt = ""
+            prompt = "<Img><ImageEmbeds></Img>"
 
         response = text_processor(sample[1]["caption"])
 

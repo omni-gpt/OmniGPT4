@@ -49,7 +49,7 @@ class ImageTextPair(pl.LightningDataModule):
         max_scale: float = 1.0,
         max_tokens: int = 32,
         num_tokens_per_image: int = 32,
-        tokenizer_name_or_path: str = "./weights/vicuna-7b-v0",
+        tokenizer_name_or_path: str = "bert-base-uncased",
         end_sym: str = "\n",
         prompt_template: str = "",
         prompts_path: Optional[str] = None,

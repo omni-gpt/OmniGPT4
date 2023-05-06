@@ -8,6 +8,7 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     Blip2Config,
     Blip2QFormerModel,
+    Blip2VisionModel,
     PreTrainedModel,
 )
 from transformers.modeling_outputs import (
@@ -20,7 +21,6 @@ from transformers.models.blip_2.modeling_blip_2 import Blip2Encoder, Blip2Vision
 from transformers.utils import logging
 
 from omnigpt4.utils.init import no_init
-from .blip_2 import Blip2VisionModel
 
 logger = logging.get_logger(__name__)
 

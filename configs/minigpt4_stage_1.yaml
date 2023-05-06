@@ -16,13 +16,15 @@ data:
         sample_rate: 14
     batch_size: 32
     num_workers: 16
+    max_tokens: 80
+    tokenizer_name_or_path: ./weights/vicuna-7b-v0
 
 model:
   class_path: omnigpt4.pl_modules.omnigpt4.OmniGPT4
   init_args:
     visual_model_name_or_path: Salesforce/blip2-flan-t5-xxl
     language_model_name_or_path: ./weights/vicuna-7b-v0
-    attention_type: xformers
+    attention_type: torch_sdpa
     optimizer_config:
       init_lr: 1e-4
       min_lr: 8e-5
