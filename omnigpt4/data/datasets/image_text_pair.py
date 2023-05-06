@@ -1,7 +1,8 @@
 import re
 from itertools import chain
-from typing import List
+from typing import List, Optional
 
+import numpy as np
 import torch
 import webdataset as wds
 from torchvision import transforms as T
@@ -10,7 +11,7 @@ from transformers import BatchEncoding, LlamaTokenizer
 from webdataset.shardlists import expand_urls
 
 
-def text_processor(caption: str, max_words: int = 50) -> str:
+def text_processor(caption: str) -> str:
     caption = re.sub(
         r"([.!\"()*#:;~])",
         " ",
@@ -24,11 +25,6 @@ def text_processor(caption: str, max_words: int = 50) -> str:
     caption = caption.rstrip("\n")
     caption = caption.strip(" ")
 
-    # truncate caption
-    caption_words = caption.split(" ")
-    if len(caption_words) > max_words:
-        caption = " ".join(caption_words[:max_words])
-
     return caption
 
 
@@ -38,11 +34,12 @@ def build_image_text_pair_pipeline(
     image_size: int = 224,
     min_scale: int = 0.5,
     max_scale: int = 1.0,
-    max_words: int = 50,
-    max_text_tokens: int = 32,
+    max_tokens: int = 32,
     num_tokens_per_image: int = 32,
     tokenizer_name_or_path: str = "./weights/vicuna-7b-v0",
     end_sym: str = "\n",
+    prompt_template: str = "",
+    prompts_path: Optional[str] = None,
 ) -> wds.DataPipeline:
     vis_processor = T.Compose([
         T.RandomResizedCrop(
@@ -64,35 +61,90 @@ def build_image_text_pair_pipeline(
     eos_token_id = tokenizer.eos_token_id
     unk_token_id = tokenizer.unk_token_id
 
+    if prompts_path is not None:
+        with open(prompts_path, "r") as f:
+            prompts = f.read().splitlines()
+
     def tokenize(sample):
-        text = text_processor(sample[1]["caption"], max_words=max_words)
+        # Random pick a prompt if prompts are provided
+        if prompts_path is not None:
+            prompt = prompt_template.format(np.random.choice(prompts))
+        else:
+            prompt = ""
 
-        tokens: BatchEncoding = tokenizer(
-            text=text + end_sym,
-            padding=False,
-            truncation=True,
-            max_length=max_text_tokens,
-            add_special_tokens=False,
-        )
+        response = text_processor(sample[1]["caption"])
 
-        # TODO: support multi images, limit total tokens (text + image)
-        # unk_token: image token
-        input_ids = [bos_token_id] + [unk_token_id] * num_tokens_per_image + tokens.input_ids
-        attention_mask = [1] * (1 + num_tokens_per_image) + tokens.attention_mask
+        input_ids = [bos_token_id]
+        attention_mask = [1]
+        vision_token_positions = []
+        target_ids = [-100]
+
+        end_tokens: BatchEncoding = tokenizer(end_sym, add_special_tokens=False)
+        num_end_tokens = len(end_tokens.input_ids)
+
+        num_remaining_tokens = max_tokens - 1 - num_end_tokens
+
+        text_pieces = prompt.split("<ImageEmbeds>")
+        for i, text_piece in enumerate(text_pieces):
+            if num_remaining_tokens <= 0:
+                break
+
+            if i > 0 and num_remaining_tokens >= num_end_tokens:
+                start_pos = len(input_ids)
+                vision_token_positions.append(
+                    list(range(start_pos, start_pos + num_tokens_per_image))
+                )
+
+                # unk_token -> image token
+                input_ids += [unk_token_id] * num_tokens_per_image
+                attention_mask += [1] * num_tokens_per_image
+                target_ids += [-100] * num_tokens_per_image
+                num_remaining_tokens -= num_tokens_per_image
+
+            if num_remaining_tokens > 0:
+                tokens: BatchEncoding = tokenizer(
+                    text=text_piece,
+                    padding=False,
+                    truncation=True,
+                    max_length=num_remaining_tokens,
+                    add_special_tokens=False,
+                )
+                input_ids += tokens.input_ids
+                attention_mask += tokens.attention_mask
+                target_ids += [-100] * len(tokens.input_ids)
+                num_remaining_tokens -= len(tokens.input_ids)
+
+        if num_remaining_tokens > 0:
+            tokens: BatchEncoding = tokenizer(
+                text=response,
+                padding=False,
+                truncation=True,
+                max_length=num_remaining_tokens,
+                add_special_tokens=False,
+            )
+            input_ids += tokens.input_ids
+            attention_mask += tokens.attention_mask
+            target_ids += tokens.input_ids
+            num_remaining_tokens -= len(tokens.input_ids)
+
+        input_ids += end_tokens.input_ids
+        attention_mask += end_tokens.attention_mask
+        target_ids += end_tokens.input_ids
 
         # to tensor
         input_ids = torch.as_tensor(input_ids, dtype=torch.long)
         attention_mask = torch.as_tensor(attention_mask, dtype=torch.long)
 
-        target_ids = input_ids.masked_fill(input_ids == tokenizer.pad_token_id, -100)
-        # bos + image tokens
-        target_ids[:1 + num_tokens_per_image] = -100
+        if len(vision_token_positions) > 0:
+            vision_token_positions = torch.as_tensor(vision_token_positions, dtype=torch.long)
+        else:
+            vision_token_positions = torch.zeros(0, num_tokens_per_image, dtype=torch.long)
 
-        vision_token_positions = torch.arange(1, num_tokens_per_image + 1, dtype=torch.long)
+        target_ids = torch.as_tensor(target_ids, dtype=torch.long)
 
         return {
             "images": sample[0][None, ...],
-            "vision_token_positions": vision_token_positions[None, :],
+            "vision_token_positions": vision_token_positions,
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "target_ids": target_ids,
@@ -111,9 +163,9 @@ def build_image_text_pair_pipeline(
             input_ids[i, :data["input_ids"].shape[0]] = data["input_ids"]
             attention_masks[i, :data["input_ids"].shape[0]] = data["attention_mask"]
 
-        max_target_tokens = max(data["target_ids"].shape[0] for data in batch)
+        max_target_ids = max(data["target_ids"].shape[0] for data in batch)
         target_ids = torch.full(
-            (batch_size, max_target_tokens), fill_value=-100, dtype=torch.long
+            (batch_size, max_target_ids), fill_value=-100, dtype=torch.long
         )
         for i, data in enumerate(batch):
             target_ids[i, :data["target_ids"].shape[0]] = data["target_ids"]

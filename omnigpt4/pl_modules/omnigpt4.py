@@ -100,12 +100,12 @@ class OmniGPT4(pl.LightningModule):
         visual_model_name_or_path: str = "Salesforce/blip2-opt-6.7b",
         language_projection_weight_path: Optional[str] = None,
         language_model_name_or_path: str = "./weights/vicuna-7b-v1.1",
+        attention_type: str = "vanilla",
         freeze_visual_model: bool = True,
         freeze_qformer: bool = True,
         freeze_language_model: bool = True,
         cache_root_path: Optional[str] = None,
         optimizer_config: Optional[OptimizerConfig] = None,
-        attention_type: str = "vanilla",
     ) -> None:
         super().__init__()
 
@@ -140,6 +140,7 @@ class OmniGPT4(pl.LightningModule):
             state_dict=state_dict,
             torch_dtype=torch.float16,
         )
+        # TODO: fix this. This will round the weights to fp16, which is not what we want.
         self.model.language_projection = self.model.language_projection.float()
 
         if freeze_visual_model:

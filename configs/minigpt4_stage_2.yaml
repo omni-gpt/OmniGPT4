@@ -3,49 +3,42 @@ data:
   init_args:
     datasets:
       - urls:
-          - data/laion/laion_dataset/{00000..10488}.tar
-          - data/laion/laion_dataset_v1/{00000..03877}.tar
-          - data/laion/laion_dataset_v1/{00000..00988}.tar
-        sample_rate: 115
-      - urls:
-          - data/cc_sbu/cc_sbu_dataset/{00000..01255}.tar
-          - data/cc_sbu/cc_sbu_dataset_v1/{00000..00346}.tar
-          - data/cc_sbu/cc_sbu_dataset_v1/{00000..00179}.tar
-          - data/cc_sbu/cc_sbu_dataset_v1/{00000..00155}.tar
-          - data/cc_sbu/cc_sbu_dataset_v1/{00000..00145}.tar
-        sample_rate: 14
-    batch_size: 32
-    num_workers: 16
+          - data/cc_sbu_align/wds.tar
+    batch_size: 6
+    num_workers: 8
+    max_tokens: 200
+    end_sym: "###"
+    prompt_template: "###Human: {} ###Assistant: "
+    prompts_path: data/minigpt4_align_prompts.txt
 
 model:
   class_path: omnigpt4.pl_modules.omnigpt4.OmniGPT4
   init_args:
     visual_model_name_or_path: Salesforce/blip2-flan-t5-xxl
+    language_projection_weight_path: ./weights/language_projection_weights_checkpoints_00020000.safetensors
     language_model_name_or_path: ./weights/vicuna-7b-v0
     attention_type: xformers
     optimizer_config:
-      init_lr: 1e-4
-      min_lr: 8e-5
+      init_lr: 3e-5
+      min_lr: 1e-5
       betas: [0.9, 0.999]
       weight_decay: 0.05
       norm_weight_decay: 0.0
-      num_warmup_steps: 10_000
+      num_warmup_steps: 200
       warmup_init_lr: 1e-6
 
 trainer:
-  devices: 4
+  devices: 2
   strategy: deepspeed_stage_2
-  max_steps: 20_000
+  max_steps: 2_000
   precision: 16-mixed
-
-  accumulate_grad_batches: 2
 
   logger:
     - class_path: omnigpt4.utils.logger.WandbLogger
       init_args:
         project: OmniGPT4
         entity: sotalab
-        name: minigpt4_stage_1
+        name: minigpt4_stage_2
 
   callbacks:
     - class_path: TQDMProgressBar
@@ -56,7 +49,7 @@ trainer:
         filename: "ckpt_{step:08d}"
         auto_insert_metric_name: False
         save_top_k: -1
-        every_n_train_steps: 10_000
+        every_n_train_steps: 1_000
     - LearningRateMonitor
 
   default_root_dir: wandb

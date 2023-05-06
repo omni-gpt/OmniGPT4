@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import lightning.pytorch as pl
@@ -47,11 +47,12 @@ class ImageTextPair(pl.LightningDataModule):
         image_size: int = 224,
         min_scale: float = 0.5,
         max_scale: float = 1.0,
-        max_words: int = 50,
-        max_text_tokens: int = 32,
+        max_tokens: int = 32,
         num_tokens_per_image: int = 32,
         tokenizer_name_or_path: str = "./weights/vicuna-7b-v0",
         end_sym: str = "\n",
+        prompt_template: str = "",
+        prompts_path: Optional[str] = None,
     ) -> None:
         super().__init__()
 
@@ -61,11 +62,12 @@ class ImageTextPair(pl.LightningDataModule):
         self.image_size = image_size
         self.min_scale = min_scale
         self.max_scale = max_scale
-        self.max_words = max_words
-        self.max_text_tokens = max_text_tokens
+        self.max_tokens = max_tokens
         self.num_tokens_per_image = num_tokens_per_image
         self.tokenizer_name_or_path = tokenizer_name_or_path
         self.end_sym = end_sym
+        self.prompt_template = prompt_template
+        self.prompts_path = prompts_path
 
     def setup(self, stage: str) -> None:
         if stage == "fit":
@@ -76,11 +78,12 @@ class ImageTextPair(pl.LightningDataModule):
                     image_size=self.image_size,
                     min_scale=self.min_scale,
                     max_scale=self.max_scale,
-                    max_words=self.max_words,
-                    max_text_tokens=self.max_text_tokens,
+                    max_tokens=self.max_tokens,
                     num_tokens_per_image=self.num_tokens_per_image,
                     tokenizer_name_or_path=self.tokenizer_name_or_path,
                     end_sym=self.end_sym,
+                    prompt_template=self.prompt_template,
+                    prompts_path=self.prompts_path,
                 )
                 for config in self.dataset_configs
             ]
