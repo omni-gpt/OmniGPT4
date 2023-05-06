@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+import peft
 import torch
 import lightning.pytorch as pl
 from lightning.pytorch.utilities.types import STEP_OUTPUT
@@ -85,6 +86,16 @@ def disabled_train(self, mode: bool = True):
 
 
 @dataclass
+class LoraConfig:
+    r: int = 8
+    lora_alpha: float = 8.
+    lora_dropout: float = 0.1
+    fan_in_fan_out: bool = False
+    bias: str = "none"
+    inference_mode: bool = False
+
+
+@dataclass
 class OptimizerConfig:
     init_lr: float = 1e-4
     min_lr: float = 8e-5
@@ -102,6 +113,7 @@ class OmniGPT4(pl.LightningModule):
         language_projection_weight_path: Optional[str] = None,
         language_model_name_or_path: str = "./weights/vicuna-7b-v1.1",
         attention_type: str = "original",
+        lora_config: Optional[LoraConfig] = None,
         freeze_visual_model: bool = True,
         freeze_qformer: bool = True,
         freeze_language_model: bool = True,
@@ -143,11 +155,6 @@ class OmniGPT4(pl.LightningModule):
         # TODO: fix this. This will round the weights to fp16, which is not what we want.
         self.model.language_projection = self.model.language_projection.float()
 
-        optimize_attention_ops(self.model, attention_type=attention_type)
-
-        self.model.vision_model = torch.compile(self.model.vision_model)
-        self.model.qformer = torch.compile(self.model.qformer)
-
         if freeze_visual_model:
             for param in self.model.vision_model.parameters():
                 param.requires_grad = False
@@ -166,6 +173,27 @@ class OmniGPT4(pl.LightningModule):
                 param.requires_grad = False
             self.model.language_model.eval()
             self.model.language_model.train = disabled_train
+
+        optimize_attention_ops(self.model, attention_type=attention_type)
+
+        self.model.vision_model = torch.compile(self.model.vision_model)
+        self.model.qformer = torch.compile(self.model.qformer)
+
+        if lora_config is not None:
+            lora_config = peft.LoraConfig(
+                task_type=peft.TaskType.CAUSAL_LM,
+                r=lora_config.r,
+                lora_alpha=lora_config.lora_alpha,
+                lora_dropout=lora_config.lora_dropout,
+                fan_in_fan_out=lora_config.fan_in_fan_out,
+                bias=lora_config.bias,
+                inference_mode=lora_config.inference_mode,
+            )
+
+            self.model.language_model = peft.get_peft_model(
+                self.model.language_model, peft_config=lora_config
+            )
+            self.model.language_model.print_trainable_parameters()
 
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> STEP_OUTPUT:
         images, vision_token_positions = batch["images"], batch["vision_token_positions"]
