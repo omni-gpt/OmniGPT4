@@ -37,7 +37,7 @@ def build_image_text_pair_pipeline(
     max_tokens: int = 64,
     num_tokens_per_image: int = 32,
     tokenizer_name_or_path: str = "bert-base-uncased",
-    end_sym: str = "\n",
+    end_sym: str = "</s>",
     prompt_template: str = "",
     prompts_path: Optional[str] = None,
 ) -> wds.DataPipeline:
@@ -71,26 +71,34 @@ def build_image_text_pair_pipeline(
         if prompts_path is not None:
             prompt = prompt_template.format(np.random.choice(prompts))
         else:
-            prompt = "<Img><ImageEmbeds></Img>"
+            # TODO: make this a parameter
+            prompt = "<img><|image_0|></img> "
 
         response = text_processor(sample[1]["caption"])
 
         input_ids = [bos_token_id]
         attention_mask = [1]
-        vision_token_positions = []
         target_ids = [-100]
+
+        images = []
+        vision_token_positions = []
 
         end_tokens: BatchEncoding = tokenizer(end_sym, add_special_tokens=False)
         num_end_tokens = len(end_tokens.input_ids)
 
         num_remaining_tokens = max_tokens - 1 - num_end_tokens
 
-        text_pieces = prompt.split("<ImageEmbeds>")
-        for i, text_piece in enumerate(text_pieces):
+        text_pieces = re.split("(\<\|image\_\d+\|\>)", prompt, flags=re.I)
+        for text_piece in text_pieces:
             if num_remaining_tokens <= 0:
                 break
 
-            if i > 0 and num_remaining_tokens >= num_end_tokens:
+            if re.match("^\<\|image\_(\d+)\|\>$", text_piece, flags=re.I):
+                if num_remaining_tokens < num_tokens_per_image:
+                    break
+
+                # TODO: support multiple images
+                images.append(sample[0])
                 start_pos = len(input_ids)
                 vision_token_positions.append(
                     list(range(start_pos, start_pos + num_tokens_per_image))
@@ -101,8 +109,7 @@ def build_image_text_pair_pipeline(
                 attention_mask += [1] * num_tokens_per_image
                 target_ids += [-100] * num_tokens_per_image
                 num_remaining_tokens -= num_tokens_per_image
-
-            if num_remaining_tokens > 0:
+            else:
                 tokens: BatchEncoding = tokenizer(
                     text=text_piece,
                     padding=False,
@@ -135,16 +142,17 @@ def build_image_text_pair_pipeline(
         # to tensor
         input_ids = torch.as_tensor(input_ids, dtype=torch.long)
         attention_mask = torch.as_tensor(attention_mask, dtype=torch.long)
-
-        if len(vision_token_positions) > 0:
-            vision_token_positions = torch.as_tensor(vision_token_positions, dtype=torch.long)
-        else:
-            vision_token_positions = torch.zeros(0, num_tokens_per_image, dtype=torch.long)
-
         target_ids = torch.as_tensor(target_ids, dtype=torch.long)
 
+        if len(vision_token_positions) > 0:
+            images = torch.stack(images, dim=0)
+            vision_token_positions = torch.as_tensor(vision_token_positions, dtype=torch.long)
+        else:
+            images = torch.zeros(0, 3, image_size, image_size, dtype=torch.float32)
+            vision_token_positions = torch.zeros(0, num_tokens_per_image, dtype=torch.long)
+
         return {
-            "images": sample[0][None, ...],
+            "images": images,
             "vision_token_positions": vision_token_positions,
             "input_ids": input_ids,
             "attention_mask": attention_mask,

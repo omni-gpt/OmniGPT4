@@ -17,26 +17,22 @@ data:
     batch_size: 32
     num_workers: 16
     max_tokens: 80
-    tokenizer_name_or_path: ./weights/vicuna-7b-v0
+    tokenizer_name_or_path: ./weights/vicuna-7b-v1.1
+    end_sym: </s>
 
 model:
   class_path: omnigpt4.pl_modules.omnigpt4.OmniGPT4
   init_args:
     visual_model_name_or_path: Salesforce/blip2-flan-t5-xxl
-    language_model_name_or_path: ./weights/vicuna-7b-v0
+    language_model_name_or_path: ./weights/vicuna-7b-v1.1
     attention_type: torch_sdpa
-    lora_config:
-      r: 16
-      lora_alpha: 16
-      lora_dropout: 0.1
-      inference_mode: False
     optimizer_config:
       init_lr: 1e-4
       min_lr: 8e-5
       betas: [0.9, 0.999]
       weight_decay: 0.05
       norm_weight_decay: 0.0
-      num_warmup_steps: 10_000
+      num_warmup_steps: 5_000
       warmup_init_lr: 1e-6
 
 trainer:
@@ -63,7 +59,7 @@ trainer:
         filename: "ckpt_{step:08d}"
         auto_insert_metric_name: False
         save_top_k: -1
-        every_n_train_steps: 10_000
+        every_n_train_steps: 5_000
     - LearningRateMonitor
 
   default_root_dir: wandb

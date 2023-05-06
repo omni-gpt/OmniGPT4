@@ -48,15 +48,16 @@ def _load_pretrained_model_state_dict(
             for k in f.keys():
                 state_dict[k] = f.get_tensor(k)
     else:
-        # TODO: support AutoCausalLM
+        print("Load LLM...")
         llm = AutoModelForCausalLM.from_pretrained(
             language_model_name_or_path,
             torch_dtype=torch.float16,
         )
         for key, val in llm.state_dict().items():
             state_dict["language_model." + key] = val
-        print("LLM weights loaded.")
+        print("LLM loaded.")
 
+        print("Load BLIP2...")
         blip2 = Blip2ForConditionalGeneration.from_pretrained(
             visual_model_name_or_path,
             torch_dtype=torch.float16,
@@ -65,7 +66,7 @@ def _load_pretrained_model_state_dict(
             if key.startswith("language_"):
                 continue
             state_dict[key] = val
-        print("BLIP2 weights loaded.")
+        print("BLIP2 loaded.")
 
         if is_global_zero:
             save_file(state_dict, cache_path)
