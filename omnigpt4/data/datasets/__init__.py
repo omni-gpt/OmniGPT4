@@ -1,1 +1,1 @@
-from .image_text_pair import build_image_text_pair_pipeline
+from .mm_chat import build_mm_chat_pipeline

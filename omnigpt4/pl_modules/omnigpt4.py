@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 import peft
 import torch
@@ -19,6 +19,7 @@ from safetensors.torch import save_file
 from slugify import slugify
 
 from omnigpt4.models.omnigpt4 import OmniGPT4Config, OmniGPT4Model
+from omnigpt4.prompts import ChatPrompts
 from omnigpt4.utils.attention import optimize_attention_ops
 from omnigpt4.utils.optim import get_param_groups, WarmupCosineAnnealingLR
 
@@ -196,17 +197,13 @@ class OmniGPT4(pl.LightningModule):
             )
             self.model.language_model.print_trainable_parameters()
 
-    def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> STEP_OUTPUT:
-        images, vision_token_positions = batch["images"], batch["vision_token_positions"]
-        input_ids, attention_masks = batch["input_ids"], batch["attention_masks"]
-        target_ids = batch["target_ids"]
-
+    def training_step(self, batch: ChatPrompts, batch_idx: int) -> STEP_OUTPUT:
         outputs = self.model(
-            input_ids=input_ids,
-            pixel_values=images,
-            vision_token_positions=vision_token_positions,
-            attention_mask=attention_masks,
-            labels=target_ids,
+            input_ids=batch.input_ids,
+            pixel_values=batch.pixel_values,
+            vision_token_indices=batch.vision_token_indices,
+            attention_mask=batch.attention_mask,
+            labels=batch.target_ids,
         )
         loss = outputs.loss
 

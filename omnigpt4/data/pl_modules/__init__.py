@@ -1,1 +1,1 @@
-from .image_text_pair import ImageTextPair
+from .mm_chat import MMChat

@@ -176,7 +176,7 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
         self,
         input_ids: torch.FloatTensor,
         pixel_values: Optional[torch.FloatTensor] = None,
-        vision_token_positions: Optional[torch.LongTensor] = None,  # TODO: find a better name
+        vision_token_indices: Optional[torch.LongTensor] = None,  # TODO: find a better name
         attention_mask: Optional[torch.LongTensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
@@ -218,11 +218,10 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
         inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
         inputs_embeds = inputs_embeds.to(image_embeds_for_lm.dtype)
 
-        # replace the [IMG] token with the image embeddings
-        vision_token_idxs = vision_token_positions.view(-1)
+        # replace the [unk] token with the image embeddings
         inputs_embeds_shape = inputs_embeds.shape
         inputs_embeds.view(-1, *inputs_embeds_shape[2:])[
-            vision_token_idxs
+            vision_token_indices.view(-1)
         ] = image_embeds_for_lm.flatten(0, 1)
         inputs_embeds = inputs_embeds.view(*inputs_embeds_shape)
 
