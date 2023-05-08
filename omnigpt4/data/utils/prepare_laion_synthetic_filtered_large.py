@@ -1,5 +1,6 @@
 import argparse
 import json
+import hashlib
 from pathlib import Path
 
 import webdataset as wds
@@ -16,6 +17,8 @@ def main():
     if not output_dir.exists():
         output_dir.mkdir()
 
+    keys = set()
+
     with wds.ShardWriter(str(output_dir / "%06d.tar"), maxsize=3e8) as sink:
         for url in args.urls:
             pipe = wds.WebDataset(url)
@@ -23,6 +26,14 @@ def main():
             for sample in tqdm(pipe):
                 meta = json.loads(sample["json"])
                 text = sample["txt"].decode("utf-8")
+
+                text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[0:8]
+
+                key = meta["sha256"] + "_" + text_hash
+                if key in keys:
+                    print("deplicate key", key, "skip")
+                    continue
+                keys.add(key)
 
                 formatted_conversations = [{
                     "human": {
@@ -37,7 +48,7 @@ def main():
                 }]
 
                 sink.write({
-                    "__key__": meta["sha256"],
+                    "__key__": key,
                     "convs.json": formatted_conversations,
                     "image_0.jpg": sample["jpg"],
                 })

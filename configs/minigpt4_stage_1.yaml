@@ -4,7 +4,7 @@ data:
     datasets:
       - urls: data/laion_synthetic_filtered_large/{000000..000010}.tar
         sample_rate: 115
-      - urls: data/ccs_synthetic_filtered_large/{000000..00010}.tar
+      - urls: data/ccs_synthetic_filtered_large/{000000..00862}.tar
         sample_rate: 14
       - urls: data/llava_cc3m_pretrain_595k/{000000..000010}.tar
         sample_rate: 1
@@ -13,10 +13,10 @@ data:
     max_length: 128
     chat_prompt_manager:
       system_message:
-        - A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
+        - A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n
       human_name: USER
       assistant_name: ASSISTANT
-      conversation_template: "{human_name}: {human_text} ###\n{assistant_name}: {assistant_text} ###\n"
+      conversation_template: "{human_name}: {human_text}\n {assistant_name}: {assistant_text}\n</s>"
       tokenizer_name_or_path: ./weights/vicuna-7b-v1.1
       image_processor:
         class_path: omnigpt4.prompts.ImageProcessor
@@ -39,7 +39,7 @@ model:
     attention_type: torch_sdpa
     optimizer_config:
       init_lr: 1e-4
-      min_lr: 8e-5
+      min_lr: 2e-5
       betas: [0.9, 0.999]
       weight_decay: 0.05
       norm_weight_decay: 0.0
@@ -47,12 +47,12 @@ model:
       warmup_init_lr: 1e-6
 
 trainer:
-  devices: 1
+  devices: 2
   strategy: deepspeed_stage_2
-  max_steps: 20_000
+  max_steps: 40_000
   precision: 16-mixed
 
-  accumulate_grad_batches: 2
+  accumulate_grad_batches: 4
 
   logger:
     - class_path: omnigpt4.utils.logger.WandbLogger
