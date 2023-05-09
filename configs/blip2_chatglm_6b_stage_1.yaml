@@ -1,0 +1,79 @@
+data:
+  class_path: omnigpt4.data.MMChat
+  init_args:
+    datasets:
+      - urls: data/laion_synthetic_filtered_large/{000000..005230}.tar
+        sample_rate: 115
+      - urls: data/ccs_synthetic_filtered_large/{000000..00862}.tar
+        sample_rate: 14
+      - urls: data/llava_cc3m_pretrain_595k/{000000..000024}.tar
+        sample_rate: 1
+    batch_size: 16
+    num_workers: 16
+    max_length: 128
+    chat_prompt_manager:
+      system_message:
+        - A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n
+      human_name: 问
+      assistant_name: 答
+      conversation_template: "[Round {round}]\n{human_name}: {human_text}\n{assistant_name}: {assistant_text}\n###"
+      tokenizer_name_or_path: THUDM/chatglm-6b
+      image_processor:
+        class_path: omnigpt4.prompts.ImageProcessor
+        init_args:
+          crop_size: 224
+          min_scale: 0.5
+          max_scale: 1.0
+      num_tokens_per_image: 32
+      prompt_store:
+        class_path: omnigpt4.prompts.PromptStore
+        init_args:
+          urls:
+            - data/prompts/describe_one_image.json
+
+model:
+  class_path: omnigpt4.pl_modules.omnigpt4.OmniGPT4
+  init_args:
+    visual_model_name_or_path: Salesforce/blip2-flan-t5-xxl
+    language_model_name_or_path: THUDM/chatglm-6b
+    cache_dir: .cache
+    optimizer_config:
+      init_lr: 1e-4
+      min_lr: 2e-5
+      betas: [0.9, 0.999]
+      weight_decay: 0.05
+      norm_weight_decay: 0.0
+      num_warmup_steps: 5_000
+      warmup_init_lr: 1e-6
+
+trainer:
+  devices: 2
+  strategy: deepspeed_stage_2
+  max_steps: 40_000
+  precision: 16-mixed
+
+  accumulate_grad_batches: 4
+
+  logger:
+    - class_path: omnigpt4.utils.logger.WandbLogger
+      init_args:
+        project: OmniGPT4
+        entity: sotalab
+        name: blip2_chatglm_6b_stage_1
+
+  callbacks:
+    - class_path: TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+    - class_path: ModelCheckpoint
+      init_args:
+        filename: "ckpt_{step:08d}"
+        auto_insert_metric_name: False
+        save_top_k: -1
+        every_n_train_steps: 5_000
+    - LearningRateMonitor
+
+  default_root_dir: wandb
+  num_sanity_val_steps: 0
+
+seed_everything: 2333

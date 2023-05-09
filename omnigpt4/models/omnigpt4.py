@@ -1,15 +1,21 @@
+import copy
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
-    AutoModelForSeq2SeqLM,
-    Blip2Config,
+    Blip2QFormerConfig,
     Blip2QFormerModel,
+    Blip2VisionConfig,
     Blip2VisionModel,
+    Blip2ForConditionalGeneration,
+    PretrainedConfig,
     PreTrainedModel,
+    CONFIG_MAPPING,
 )
 from transformers.modeling_outputs import (
     BaseModelOutputWithPooling,
@@ -18,16 +24,95 @@ from transformers.modeling_outputs import (
     Seq2SeqLMOutput,
 )
 from transformers.models.blip_2.modeling_blip_2 import Blip2Encoder, Blip2VisionEmbeddings
+from transformers.modeling_utils import no_init_weights
 from transformers.utils import logging
+from safetensors.torch import load_model, save_model
+from slugify import slugify
 
+from omnigpt4.utils.freeze import freeze
 from omnigpt4.utils.init import no_init
+from omnigpt4.utils.sdpa_hooks import optimize_sdpa_ops
 
 logger = logging.get_logger(__name__)
 
 
-class OmniGPT4Config(Blip2Config):
+class OmniGPT4Config(PretrainedConfig):
     model_type = "omnigpt4"
     is_composition = True
+
+    def __init__(self, vision_config=None, qformer_config=None, text_config=None, num_query_tokens=32, **kwargs):
+        super().__init__(**kwargs)
+
+        if vision_config is None:
+            vision_config = {}
+            logger.info("vision_config is None. initializing the Blip2VisionConfig with default values.")
+
+        if qformer_config is None:
+            qformer_config = {}
+            logger.info("qformer_config is None. Initializing the Blip2QFormerConfig with default values.")
+
+        if text_config is None:
+            text_config = {}
+            logger.info("text_config is None. Initializing the text config with default values (`LLaMaConfig`).")
+
+        if isinstance(vision_config, dict):
+            vision_config = Blip2VisionConfig(**vision_config)
+
+        if isinstance(qformer_config, dict):
+            qformer_config = Blip2QFormerConfig(**qformer_config)
+
+        if isinstance(text_config, dict):
+            text_model_type = text_config["model_type"] if "model_type" in text_config else "llama"
+            text_config = CONFIG_MAPPING[text_model_type](**text_config)
+
+        self.vision_config = vision_config
+        self.qformer_config = qformer_config
+        self.text_config = text_config
+
+        self.tie_word_embeddings = self.text_config.tie_word_embeddings
+        self.is_encoder_decoder = self.text_config.is_encoder_decoder
+
+        self.num_query_tokens = num_query_tokens
+        self.qformer_config.encoder_hidden_size = self.vision_config.hidden_size
+        self.initializer_factor = 1.0
+        self.initializer_range = 0.02
+
+    @classmethod
+    def from_vision_qformer_text_configs(
+        cls,
+        vision_config: Blip2VisionConfig,
+        qformer_config: Blip2QFormerConfig,
+        text_config: PretrainedConfig,
+        **kwargs,
+    ):
+        r"""
+        Instantiate a [`Blip2Config`] (or a derived class) from a BLIP-2 vision model, Q-Former and language model
+        configurations.
+
+        Returns:
+            [`Blip2Config`]: An instance of a configuration object
+        """
+
+        return cls(
+            vision_config=vision_config,
+            qformer_config=qformer_config,
+            text_config=text_config,
+            **kwargs,
+        )
+
+    def to_dict(self):
+        """
+        Serializes this instance to a Python dictionary. Override the default [`~PretrainedConfig.to_dict`].
+
+        Returns:
+            `Dict[str, any]`: Dictionary of all the attributes that make up this configuration instance,
+        """
+        output = copy.deepcopy(self.__dict__)
+        output["vision_config"] = self.vision_config.to_dict()
+        output["qformer_config"] = self.qformer_config.to_dict()
+        output["text_config"] = self.text_config.to_dict()
+        output["model_type"] = self.__class__.model_type
+        return output
 
 
 class OmniGPT4PreTrainedModel(PreTrainedModel):
@@ -109,25 +194,124 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
     def __init__(self, config: OmniGPT4Config):
         super().__init__(config)
 
-        # TODO: add enabled flags for each component
         with no_init():
             self.vision_model = Blip2VisionModel(config.vision_config)
 
         with no_init():
-            self.query_tokens = nn.Parameter(torch.zeros(1, config.num_query_tokens, config.qformer_config.hidden_size))
+            self.query_tokens = nn.Parameter(
+                torch.zeros(1, config.num_query_tokens, config.qformer_config.hidden_size)
+            )
             self.qformer = Blip2QFormerModel(config.qformer_config)
 
         self.language_projection = nn.Linear(config.qformer_config.hidden_size, config.text_config.hidden_size)
 
         with no_init():
-            if config.use_decoder_only_language_model:
-                language_model = AutoModelForCausalLM.from_config(config.text_config)
-            else:
-                language_model = AutoModelForSeq2SeqLM.from_config(config.text_config)
-            self.language_model: PreTrainedModel = language_model
+            trust_remote_code = hasattr(config.text_config, "auto_map")
+            self.language_model: PreTrainedModel = AutoModelForCausalLM.from_config(
+                config.text_config,
+                trust_remote_code=trust_remote_code,
+            )
+            self.language_model.tie_weights()
 
-        # Initialize weights and apply final processing
-        self.post_init()
+    @classmethod
+    def from_vision_qformer_text_pretrained(
+        cls,
+        visual_model_name_or_path: str,
+        language_model_name_or_path: str,
+        language_projection_weight_path: Optional[str] = None,
+        sdpa_impl: str = "auto",
+        compile_visual_model: bool = True,
+        compile_qformer: bool = True,
+        cache_dir: Optional[Union[str, Path]] = None,
+    ) -> "OmniGPT4Model":
+        trust_remote_code = language_model_name_or_path in ["THUDM/chatglm-6b"]
+        revision = "main" if trust_remote_code else None
+
+        config = OmniGPT4Config.from_vision_qformer_text_configs(
+            vision_config=Blip2VisionConfig.from_pretrained(visual_model_name_or_path),
+            qformer_config=Blip2QFormerConfig.from_pretrained(visual_model_name_or_path),
+            text_config=AutoConfig.from_pretrained(
+                language_model_name_or_path,
+                trust_remote_code=language_model_name_or_path in ["THUDM/chatglm-6b"],
+                revision=revision,
+            ),
+        )
+        config.vision_config.layer_norm_eps = 1e-6  # following the original EVA-ViT config
+
+        if cache_dir is None:
+            cache_dir = Path.home() / ".cache" / "omnigpt4"
+        else:
+            cache_dir = Path(cache_dir)
+
+        if not cache_dir.exists():
+            cache_dir.mkdir(parents=True)
+
+        cache_name = slugify(f"{language_model_name_or_path}_{visual_model_name_or_path}")
+        cache_path = cache_dir / (cache_name + ".safetensors")
+
+        with no_init_weights():
+            model = cls(config)
+
+        if cache_path.exists():
+            logger.info("Loading cached weights...")
+            load_model(model, str(cache_path))
+        else:
+            logger.info("Loading BLIP2...")
+            with no_init():
+                blip2 = Blip2ForConditionalGeneration.from_pretrained(
+                    visual_model_name_or_path,
+                    torch_dtype=torch.float16,
+                )
+            model.vision_model = blip2.vision_model
+            model.query_tokens = blip2.query_tokens
+            model.qformer = blip2.qformer
+            del blip2
+
+            logger.info("Loading LLM...")
+            trust_remote_code = language_model_name_or_path in ["THUDM/chatglm-6b"]
+            revision = "main" if trust_remote_code else None
+
+            with no_init():
+                llm = AutoModelForCausalLM.from_pretrained(
+                    language_model_name_or_path,
+                    trust_remote_code=trust_remote_code,
+                    revision=revision,
+                    torch_dtype=torch.float16,
+                )
+            model.language_model = llm
+            logger.info("Done.")
+
+            save_model(model, str(cache_path))
+
+        if language_projection_weight_path is not None:
+            logger.info("Loading language projection...")
+            load_model(model.language_projection, language_projection_weight_path)
+            logger.info("Done.")
+        else:
+            model.language_projection.reset_parameters()
+
+        optimize_sdpa_ops(model, sdpa_impl=sdpa_impl)
+
+        if compile_visual_model:
+            model.vision_model = torch.compile(model.vision_model)
+
+        if compile_qformer:
+            model.qformer = torch.compile(model.qformer)
+
+        return model
+
+    def freeze_vision_model(self):
+        freeze(self.vision_model)
+
+    def freeze_qformer(self):
+        self.query_tokens.requires_grad = False
+        freeze(self.qformer)
+
+    def freeze_language_projection(self):
+        freeze(self.language_projection)
+
+    def freeze_language_model(self):
+        freeze(self.language_model)
 
     def get_input_embeddings(self):
         return self.language_model.get_input_embeddings()
@@ -178,8 +362,6 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
         pixel_values: Optional[torch.FloatTensor] = None,
         vision_token_indices: Optional[torch.LongTensor] = None,  # TODO: find a better name
         attention_mask: Optional[torch.LongTensor] = None,
-        decoder_input_ids: Optional[torch.LongTensor] = None,
-        decoder_attention_mask: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         labels: Optional[torch.LongTensor] = None,
@@ -229,26 +411,14 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
             attention_mask = torch.ones_like(input_ids)
         attention_mask = attention_mask.to(image_embeds_for_lm.dtype)
 
-        if self.config.use_decoder_only_language_model:
-            outputs = self.language_model(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                labels=labels,
-            )
-        else:
-            outputs = self.language_model(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                decoder_input_ids=decoder_input_ids,
-                decoder_attention_mask=decoder_attention_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                labels=labels,
-            )
+        outputs = self.language_model(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            labels=labels,
+        )
 
         loss = outputs.loss if return_dict else outputs[0]
         logits = outputs.logits if return_dict else outputs[1]

@@ -1,5 +1,4 @@
 import math
-from functools import partial, wraps
 from typing import Optional, Tuple
 
 import torch
@@ -24,7 +23,7 @@ def blip2_forward(
 
     mixed_qkv = self.qkv(hidden_states)
 
-    if self._attention_type == "xformers":
+    if self._sdpa_impl == "xformers":
         mixed_qkv = mixed_qkv.reshape(bsz, tgt_len, 3, self.num_heads, embed_dim // self.num_heads).permute(
             2, 0, 1, 3, 4
         )
@@ -39,7 +38,7 @@ def blip2_forward(
         mixed_qkv[2],
     )
 
-    if self._attention_type == "original":
+    if self._sdpa_impl == "original":
         # Take the dot product between "query" and "key" to get the raw attention scores.
         attention_scores = torch.matmul(query_states * self.scale, key_states.transpose(-1, -2))
 
@@ -55,18 +54,18 @@ def blip2_forward(
             attention_probs = attention_probs * head_mask
 
         context_layer = torch.matmul(attention_probs, value_states)
-    elif self._attention_type == "torch_sdpa":
+    elif self._sdpa_impl == "torch_sdpa":
         context_layer = F.scaled_dot_product_attention(
             query_states, key_states, value_states,
         )
-    elif self._attention_type == "xformers":
+    elif self._sdpa_impl == "xformers":
         context_layer = xops.memory_efficient_attention(
             query_states, key_states, value_states, scale=self.scale
         )
     else:
-        raise NotImplementedError(self._attention_type)
+        raise NotImplementedError(self._sdpa_impl)
 
-    if self._attention_type != "xformers":
+    if self._sdpa_impl != "xformers":
         context_layer = context_layer.permute(0, 2, 1, 3)
 
     new_context_layer_shape = context_layer.size()[:-2] + (self.embed_dim,)
@@ -129,7 +128,7 @@ def llama_forward(
     key_states = self.k_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim)
     value_states = self.v_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim)
 
-    if self._attention_type == "xformers":
+    if self._sdpa_impl == "xformers":
         # [b, seq_len, nh, head_dim]
         seq_len_dim = 1
     else:
@@ -147,7 +146,7 @@ def llama_forward(
     cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
     query_states, key_states = apply_rotary_pos_emb(
         query_states, key_states, cos, sin, position_ids,
-        with_xformers=self._attention_type == "xformers",
+        with_xformers=self._sdpa_impl == "xformers",
     )
 
     if past_key_value is not None:
@@ -157,7 +156,7 @@ def llama_forward(
 
     past_key_value = (key_states, value_states) if use_cache else None
 
-    if self._attention_type == "original":
+    if self._sdpa_impl == "original":
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
@@ -183,18 +182,18 @@ def llama_forward(
                 f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
                 f" {attn_output.size()}"
             )
-    elif self._attention_type == "torch_sdpa":
+    elif self._sdpa_impl == "torch_sdpa":
         attn_output = F.scaled_dot_product_attention(
             query_states, key_states, value_states, attn_mask=attention_mask
         )
-    elif self._attention_type == "xformers":
+    elif self._sdpa_impl == "xformers":
         attn_output = xops.memory_efficient_attention(
             query_states, key_states, value_states, attn_bias=attention_mask,
         )
     else:
-        raise NotImplementedError(self._attention_type)
+        raise NotImplementedError(self._sdpa_impl)
 
-    if self._attention_type != "xformers":
+    if self._sdpa_impl != "xformers":
         attn_output = attn_output.transpose(1, 2)
 
     attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
@@ -242,14 +241,18 @@ def llama_prepare_decoder_attention_mask(
     return combined_attention_mask
 
 
-def optimize_attention_ops(model: nn.Module, attention_type: str) -> None:
+def optimize_sdpa_ops(model: nn.Module, sdpa_impl: str = "auto") -> None:
+    if sdpa_impl == "auto":
+        # TODO: detect if xformers is installed
+        sdpa_impl = "torch_sdpa"
+
     for module in model.modules():
-        module._attention_type = attention_type
+        module._sdpa_impl = sdpa_impl
         if isinstance(module, Blip2Attention):
             module.forward = blip2_forward.__get__(module, Blip2Attention)
         elif isinstance(module, LlamaAttention):
             module.forward = llama_forward.__get__(module, LlamaAttention)
-        elif isinstance(module, LlamaModel) and attention_type == "xformers":
+        elif isinstance(module, LlamaModel) and sdpa_impl == "xformers":
             module._prepare_decoder_attention_mask = llama_prepare_decoder_attention_mask.__get__(
                 module, LlamaModel
             )

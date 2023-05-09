@@ -193,9 +193,11 @@ class ChatPromptManager:
     @property
     def tokenizer(self):
         if not hasattr(self, "_tokenizer"):
+            trust_remote_code = self.tokenizer_name_or_path in ["THUDM/chatglm-6b"]
             self._tokenizer = AutoTokenizer.from_pretrained(
                 self.tokenizer_name_or_path,
                 use_fast=False,
+                trust_remote_code=trust_remote_code,
             )
             self._tokenizer.pad_token = self._tokenizer.eos_token
 

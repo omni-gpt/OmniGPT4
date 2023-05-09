@@ -1,6 +1,7 @@
 import argparse
 import json
 import io
+import hashlib
 import zipfile
 from pathlib import Path
 
@@ -59,6 +60,8 @@ def process_llava_cc3m_pretrain_595k(
     with open(text_path, "r") as f:
         samples = json.load(f)
 
+    keys = set()
+
     with zipfile.ZipFile(images_path) as images_zip:
         for sample in tqdm(samples):
             sample_id = sample["id"]
@@ -69,6 +72,15 @@ def process_llava_cc3m_pretrain_595k(
             assert conversations[0]["from"] == "human"
             assert conversations[1]["from"] == "gpt"
 
+            text = conversations[1]["value"]
+            text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[0:8]
+
+            key = sample_id + "_" + text_hash
+            if key in keys:
+                print("deplicate key", key, "skip")
+                continue
+            keys.add(key)
+
             formatted_conversations = [{
                 "human": {
                     "tag": "mm:describe_one_image",
@@ -77,7 +89,7 @@ def process_llava_cc3m_pretrain_595k(
                     },
                 },
                 "assistant": {
-                    "text": conversations[1]["value"],
+                    "text": text,
                 },
             }]
 
@@ -91,7 +103,7 @@ def process_llava_cc3m_pretrain_595k(
             image.save(image_bytes_io, format="JPEG")
 
             sink.write({
-                "__key__": sample_id,
+                "__key__": key,
                 "convs.json": formatted_conversations,
                 "image_0.jpg": image_bytes_io.getvalue(),
             })
