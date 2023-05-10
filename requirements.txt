@@ -7,3 +7,5 @@ jsonargparse[signatures]>=4.17.0
 wandb>=0.15.0
 xformers>=0.0.19
 peft>=0.3.0
+python-slugify>=8.0.1
+deepspeed>=0.9.1

@@ -16,8 +16,8 @@ def main():
 
     save_file(
         {
-            "language_projection.weight": weight.clone(),
-            "language_projection.bias": bias.clone(),
+            "weight": weight.clone(),
+            "bias": bias.clone(),
         },
         args.output,
     )
