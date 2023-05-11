@@ -30,6 +30,11 @@ model:
     language_projection_weight_path: weights/blip2_bloomz_7b1_stage_1_kt01xa66_00040000.safetensors
     compile_visual_model: False
     compile_qformer: False
+    lora_config:
+      r: 16
+      lora_alpha: 16
+      lora_dropout: 0.1
+      inference_mode: False
     cache_dir: .cache
     optimizer_config:
       init_lr: 2e-5
@@ -53,7 +58,7 @@ trainer:
       init_args:
         project: OmniGPT4
         entity: sotalab
-        name: blip2_bloomz_7b1_stage_2
+        name: blip2_bloomz_7b1_stage_2_lora
 
   callbacks:
     - class_path: TQDMProgressBar

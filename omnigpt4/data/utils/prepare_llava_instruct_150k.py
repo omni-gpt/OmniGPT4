@@ -86,17 +86,7 @@ def process_llava_instruct_150k(
                 continue
             keys.add(key)
 
-            formatted_conversations = [{
-                "human": {
-                    "tag": "mm:describe_one_image",
-                    "extra_data": {
-                        "image_0": "image_0.jpg",
-                    },
-                },
-                "assistant": {
-                    "text": text,
-                },
-            }]
+            formatted_conversations = []
             for i in range(0, len(conversations), 2):
                 conv = {
                     "human": {
