@@ -1,0 +1,130 @@
+[
+    {
+        "text": "<img><|ref_image_0|></img>\nProvide a brief description of the given image.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img>\nOffer a succinct explanation of the picture presented.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "Present a compact description of the photo's key features.\n<img><|ref_image_0|></img>",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img>\nWrite a terse but informative summary of the picture.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img>\nSummarize the visual content of the image.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "Create a compact narrative representing the image presented.\n<img><|ref_image_0|></img>",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "Provide a brief description of the given image.\n<img><|ref_image_0|></img>",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img>\nRelay a brief, clear account of the picture shown.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "Write a terse but informative summary of the picture.\n<img><|ref_image_0|></img>",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "Give a short and clear explanation of the subsequent image.\n<img><|ref_image_0|></img>",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img>\nGive a short and clear explanation of the subsequent image.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img>\nRender a clear and concise summary of the photo.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img>\nPresent a compact description of the photo's key features.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img>\nCreate a compact narrative representing the image presented.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "Describe the image concisely.\n<img><|ref_image_0|></img>",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "Render a clear and concise summary of the photo.\n<img><|ref_image_0|></img>",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "Offer a succinct explanation of the picture presented.\n<img><|ref_image_0|></img>",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img>\nDescribe the image concisely.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img>\nShare a concise interpretation of the image provided.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "Share a concise interpretation of the image provided.\n<img><|ref_image_0|></img>",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "Relay a brief, clear account of the picture shown.\n<img><|ref_image_0|></img>",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "Summarize the visual content of the image.\n<img><|ref_image_0|></img>",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img> What do you see in this image?",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img> What is happening in this image?",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img> What is the main object in this image?",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img> What is the main focus of this image?",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img> Describe this image in detail.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img> Take a look at this image and describe what you notice.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img> Please provide a detailed description of the picture.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "<img><|ref_image_0|></img> Could you describe the contents of this image for me?",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "This is a picture <img><|ref_image_0|></img> Describe it.",
+        "tag": "mm:describe_one_image"
+    },
+    {
+        "text": "I found a picture: <img><|ref_image_0|></img>. Please provide a detailed description of this image.",
+        "tag": "mm:describe_one_image"
+    }
+]
