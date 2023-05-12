@@ -7,6 +7,7 @@ from functools import partial
 from typing import Any, Dict, List, Optional, Union, Tuple
 
 import torch
+import numpy as np
 from PIL import Image
 from pydantic import BaseModel
 from torchvision import transforms as T
@@ -58,15 +59,15 @@ class Conversation(BaseModel):
 
 @dataclass
 class ChatPrompts:
-    input_ids: torch.Tensor
+    input_ids: Union[torch.Tensor, np.ndarray]
 
-    attention_mask: torch.Tensor
+    attention_mask: Union[torch.Tensor, np.ndarray]
 
-    pixel_values: Optional[torch.Tensor] = None
+    pixel_values: Optional[Union[torch.Tensor, np.ndarray]] = None
 
-    vision_token_indices: Optional[torch.Tensor] = None
+    vision_token_indices: Optional[Union[torch.Tensor, np.ndarray]] = None
 
-    target_ids: Optional[torch.Tensor] = None
+    target_ids: Optional[Union[torch.Tensor, np.ndarray]] = None
 
     is_batched: bool = False
 
@@ -81,10 +82,18 @@ class ChatPrompts:
         max_input_ids = max(data.input_ids.shape[0] for data in batch)
         # padding to multiple of 8
         max_input_ids = (max_input_ids + 7) // 8 * 8
-        input_ids = torch.full(
-            (batch_size, max_input_ids), fill_value=eos_token_id, dtype=torch.long
-        )
-        attention_masks = torch.zeros(batch_size, max_input_ids, dtype=torch.long)
+
+        if isinstance(batch[0].input_ids, np.ndarray):
+            input_ids = np.full(
+                (batch_size, max_input_ids), fill_value=eos_token_id, dtype=np.long
+            )
+            attention_masks = np.zeros_like(input_ids)
+        else:
+            input_ids = torch.full(
+                (batch_size, max_input_ids), fill_value=eos_token_id, dtype=torch.long
+            )
+            attention_masks = torch.zeros_like(input_ids)
+
         for i, data in enumerate(batch):
             input_ids[i, : data.input_ids.shape[0]] = data.input_ids
             attention_masks[i, : data.input_ids.shape[0]] = data.attention_mask
@@ -103,8 +112,12 @@ class ChatPrompts:
                 offset += max_input_ids
 
         if len(pixel_values) > 0:
-            pixel_values = torch.cat(pixel_values, dim=0)
-            vision_token_indices = torch.cat(vision_token_indices, dim=0)
+            if isinstance(pixel_values[0], np.ndarray):
+                pixel_values = np.concatenate(pixel_values, axis=0)
+                vision_token_indices = np.concatenate(vision_token_indices, axis=0)
+            else:
+                pixel_values = torch.cat(pixel_values, dim=0)
+                vision_token_indices = torch.cat(vision_token_indices, dim=0)
         else:
             pixel_values = None
             vision_token_indices = None
@@ -113,11 +126,21 @@ class ChatPrompts:
             max_target_ids = max(data.target_ids.shape[0] for data in batch)
             # padding to multiple of 8
             max_target_ids = (max_target_ids + 7) // 8 * 8
-            target_ids = torch.full(
-                (batch_size, max_target_ids), fill_value=-100, dtype=torch.long
-            )
+            assert max_target_ids == max_input_ids
+
+            if isinstance(batch[0].target_ids, np.ndarray):
+                target_ids = np.full(
+                    (batch_size, max_target_ids), fill_value=-100, dtype=np.long
+                )
+            else:
+                target_ids = torch.full(
+                    (batch_size, max_target_ids), fill_value=-100, dtype=torch.long
+                )
+
             for i, data in enumerate(batch):
                 target_ids[i, :data.target_ids.shape[0]] = data.target_ids
+        else:
+            target_ids = None
 
         return cls(
             input_ids=input_ids,
@@ -178,7 +201,7 @@ class ChatPromptManager:
 
     conversation_template: str = "{human_name}: {human_text} ###\n{assistant_name}: {assistant_text} ###\n"
 
-    tokenizer_name_or_path: str = "bert-base-uncased"
+    tokenizer_name_or_path: str = "bigscience/bloomz-7b1"
 
     image_processor: Optional[ImageProcessor] = None
 
@@ -189,6 +212,19 @@ class ChatPromptManager:
     def __post_init__(self):
         if self.image_processor is None:
             self.image_processor = ImageProcessor()
+
+    def copy(self) -> "ChatPromptManager":
+        return ChatPromptManager(
+            system_message=copy.copy(self.system_message),
+            human_name=self.human_name,
+            assistant_name=self.assistant_name,
+            conversations=copy.copy(self.conversations),
+            conversation_template=self.conversation_template,
+            tokenizer_name_or_path=self.tokenizer_name_or_path,
+            image_processor=self.image_processor,
+            num_tokens_per_image=self.num_tokens_per_image,
+            prompt_store=self.prompt_store,
+        )
 
     @property
     def tokenizer(self):
@@ -316,14 +352,18 @@ class ChatPromptManager:
                     if num_remaining_tokens < self.num_tokens_per_image:
                         break
 
-                    assert isinstance(ref_obj, Image.Image), (
-                        f"Image reference must be of type PIL.Image.Image, but got {type(ref_obj)}."
+                    assert isinstance(ref_obj, (Image.Image, np.ndarray)), (
+                        "Image reference must be of type PIL.Image.Image or np.ndarray, "
+                        f"but got {type(ref_obj)}."
                     )
                     assert self.image_processor is not None, (
                         "image_processor must be specified if message contains an image."
                     )
 
-                    pixel_values.append(self.image_processor(ref_obj))
+                    if isinstance(ref_obj, Image.Image):
+                        pixel_values.append(self.image_processor(ref_obj))
+                    else:
+                        pixel_values.append(torch.from_numpy(ref_obj))
                     start_index = len(input_ids)
                     vision_token_indices.append([start_index + i for i in range(self.num_tokens_per_image)])
 
@@ -364,6 +404,7 @@ class ChatPromptManager:
         conversations: Union[List[Conversation], List[dict]],
         max_length: int = 512,
         inference: bool = False,
+        return_tensors: str = "pt",
     ) -> ChatPrompts:
         assert len(conversations) > 0, "At least one conversation is required."
         if isinstance(conversations[0], dict):
@@ -402,19 +443,34 @@ class ChatPromptManager:
                 message_2, max_length=num_remaining_tokens
             )
 
-        # To tensor
-        input_ids = torch.as_tensor(input_ids, dtype=torch.long)
-        attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+        input_ids = np.asarray(input_ids, dtype=np.long)
+        attention_mask = np.ones_like(input_ids, dtype=np.bool)
 
         if len(pixel_values) > 0:
-            pixel_values = torch.stack(pixel_values, dim=0)
-            vision_token_indices = torch.tensor(vision_token_indices, dtype=torch.long)
+            pixel_values = np.stack(pixel_values, axis=0)
+            vision_token_indices = np.asarray(vision_token_indices, dtype=np.long)
         else:
             pixel_values = None
             vision_token_indices = None
 
         if target_ids is not None:
-            target_ids = torch.as_tensor(target_ids, dtype=torch.long)
+            target_ids = np.asarray(target_ids, dtype=np.long)
+
+        # To tensor
+        if return_tensors == "pt":
+            input_ids = torch.from_numpy(input_ids)
+            attention_mask = torch.from_numpy(attention_mask)
+
+            if len(pixel_values) > 0:
+                pixel_values = torch.from_numpy(pixel_values)
+                vision_token_indices = torch.from_numpy(vision_token_indices)
+
+            if target_ids is not None:
+                target_ids = torch.from_numpy(target_ids)
+        else:
+            assert return_tensors == "np", (
+                f"return_tensors must be 'pt' or 'np', but got {return_tensors}."
+            )
 
         return ChatPrompts(
             input_ids=input_ids,

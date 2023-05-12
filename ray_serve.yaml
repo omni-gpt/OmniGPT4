@@ -1,0 +1,25 @@
+# proxy_location: EveryNode
+
+# http_options:
+#   host: 0.0.0.0
+#   port: 8000
+
+# applications:
+
+import_path: omnigpt4.serve.mmchat.ingress
+
+runtime_env: {}
+
+host: 0.0.0.0
+
+port: 8000
+
+deployments:
+  - name: MMChatIngress
+    num_replicas: 1
+
+  - name: ImageProcessorDeployment
+    num_replicas: 4
+
+  - name: ChatPromptManagerDeployment
+    num_replicas: 2

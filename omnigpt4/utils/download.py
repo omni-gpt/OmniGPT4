@@ -1,7 +1,9 @@
 import shutil
 from pathlib import Path
-from typing import Union
+from typing import Union, List
 
+import asyncio
+import aiohttp
 import requests
 from tqdm import tqdm
 
@@ -25,3 +27,24 @@ def download(
                         f.write(chunk)
             else:
                 shutil.copyfileobj(r.raw, f)
+
+
+def parallel_download_to_memeory(urls: List[str], concurrency: int = 10):
+    sema = asyncio.BoundedSemaphore(concurrency)
+
+    async def fetch_file(url: str):
+        async with sema, aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                else:
+                    data = None
+
+        return data
+
+    loop = asyncio.get_event_loop()
+    tasks = [loop.create_task(fetch_file(url)) for url in urls]
+    loop.run_until_complete(asyncio.wait(tasks))
+    loop.close()
+
+    return [task.result() for task in tasks]
