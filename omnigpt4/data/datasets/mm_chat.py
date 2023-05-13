@@ -51,7 +51,11 @@ def build_mm_chat_pipeline(
         wds.map(process, handler=wds.warn_and_continue),
         wds.batched(
             batch_size,
-            collation_fn=partial(ChatPrompts.collate, eos_token_id=eos_token_id),
+            collation_fn=partial(
+                ChatPrompts.collate,
+                eos_token_id=eos_token_id,
+                pad_to_multiple_of=8,
+            ),
             partial=False,  # drop last batch if it's not full
         ),
     )

@@ -1,3 +1,4 @@
+import asyncio
 import re
 from typing import List
 
@@ -24,7 +25,11 @@ class ChatPromptManagerDeployment:
         self,
         image_processor: RayServeDeploymentHandle
     ) -> None:
-        self.chat_prompt_manager = ChatPromptManager()
+        self.chat_prompt_manager = ChatPromptManager(
+            human_name="Human",
+            assistant_name="Assistant",
+            tokenizer_name_or_path="bigscience/bloomz-7b1",
+        )
         self.image_processor = image_processor
 
     # TODO: reconfigure
@@ -33,39 +38,43 @@ class ChatPromptManagerDeployment:
     def get_eos_token_id(self):
         return self.chat_prompt_manager.tokenizer.eos_token_id
 
-    def get_prompt(self, messages: List[ChatMessage], max_length: int = 4096) -> str:
+    async def get_prompt(self, messages: List[ChatMessage], max_length: int = 4096) -> str:
         chat_prompt_manager = self.chat_prompt_manager.copy()
 
         conversations: List[Conversation] = []
 
-        last_conv = None
+        last_human_texts = []
+        last_assistant_texts = []
         last_role = None
 
         for msg in messages:
             if msg.role == Role.user:
                 if last_role == Role.assistant:
-                    assert last_conv is not None
-                    conversations.append(last_conv)
-                    last_conv = None
+                    assert len(last_human_texts) > 0
+                    conversations.append(Conversation(
+                        human=HumanMessage(text="\n".join(last_human_texts)),
+                        assistant=AssistantMessage(text="\n".join(last_assistant_texts)),
+                    ))
+                    last_human_texts = []
+                    last_assistant_texts = []
 
-                if last_conv is None:
-                    last_conv = Conversation(
-                        human=HumanMessage(text=""),
-                        assistant=AssistantMessage(text=""),
-                    )
-                last_conv.human.text += ("\n" + msg.content)
+                last_human_texts.append(msg.content)
             elif msg.role == Role.assistant:
-                last_conv.assistant.text += ("\n" + msg.content)
+                last_assistant_texts.append(msg.content)
             elif msg.role == Role.system:
                 # TODO: add stop token
-                chat_prompt_manager.system_message.append(msg.content + "\n")
+                chat_prompt_manager.system_message.append(msg.content)
             else:
                 raise ValueError(f"Invalid role {msg.role}")
 
             last_role = msg.role
 
-        if last_conv is not None:
-            conversations.append(last_conv)
+        if len(last_human_texts) > 0 or len(last_assistant_texts) > 0:
+            assert len(last_human_texts) > 0
+            conversations.append(Conversation(
+                human=HumanMessage(text="\n".join(last_human_texts)),
+                assistant=AssistantMessage(text="\n".join(last_assistant_texts)),
+            ))
 
         image_refs = {}
 
@@ -81,9 +90,14 @@ class ChatPromptManagerDeployment:
             find_images(conv.human)
             find_images(conv.assistant)
 
+        for key, ref in image_refs.items():
+            image_refs[key] = await ref
+
         def replace_images(msg: Message):
             if msg.text is None:
                 return
+
+            msg.extra_data = {}
 
             def replace_fn(m):
                 image_url = m.group("image")

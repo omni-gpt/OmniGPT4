@@ -31,7 +31,7 @@ class ImageProcessorDeployment:
             rsp.raise_for_status()
 
             image_size = rsp.headers["Content-length"]
-            if image_size > self.max_image_size:
+            if int(image_size) > self.max_image_size:
                 raise ValueError(
                     f"Image size {image_size} exceeds max size {self.max_image_size}"
                 )

@@ -440,7 +440,7 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
         self,
         input_ids: torch.FloatTensor,
         pixel_values: Optional[torch.FloatTensor] = None,
-        vision_token_positions: Optional[torch.LongTensor] = None,  # TODO: find a better name
+        vision_token_indices: Optional[torch.LongTensor] = None,  # TODO: find a better name
         attention_mask: Optional[torch.LongTensor] = None,
         **generate_kwargs,
     ) -> torch.LongTensor:
@@ -462,34 +462,36 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
             # preprocess for `accelerate`
             self._preprocess_accelerate()
 
-        image_embeds = self.vision_model(pixel_values, return_dict=True).last_hidden_state
-        image_attention_mask = torch.ones(image_embeds.size()[:-1], dtype=torch.long, device=image_embeds.device)
+        if pixel_values is not None:
+            image_embeds = self.vision_model(pixel_values, return_dict=True).last_hidden_state
+            image_attention_mask = torch.ones(image_embeds.size()[:-1], dtype=torch.long, device=image_embeds.device)
 
-        query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
-        query_outputs = self.qformer(
-            query_embeds=query_tokens,
-            encoder_hidden_states=image_embeds,
-            encoder_attention_mask=image_attention_mask,
-            return_dict=True,
-        )
-        query_output = query_outputs.last_hidden_state
+            query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+            query_outputs = self.qformer(
+                query_embeds=query_tokens,
+                encoder_hidden_states=image_embeds,
+                encoder_attention_mask=image_attention_mask,
+                return_dict=True,
+            )
+            query_output = query_outputs.last_hidden_state
 
-        image_embeds_for_lm = self.language_projection(query_output)
+            image_embeds_for_lm = self.language_projection(query_output)
 
         inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
-        inputs_embeds = inputs_embeds.to(image_embeds_for_lm.dtype)
 
-        # replace the [IMG] token with the image embeddings
-        vision_token_idxs = vision_token_positions.view(-1)
-        inputs_embeds_shape = inputs_embeds.shape
-        inputs_embeds.view(-1, *inputs_embeds_shape[2:])[
-            vision_token_idxs
-        ] = image_embeds_for_lm.flatten(0, 1)
-        inputs_embeds = inputs_embeds.view(*inputs_embeds_shape)
+        if vision_token_indices is not None:
+            inputs_embeds = inputs_embeds.to(image_embeds_for_lm.dtype)
+
+            # replace the [UNK] token with the image embeddings
+            inputs_embeds_shape = inputs_embeds.shape
+            inputs_embeds.view(-1, *inputs_embeds_shape[2:])[
+                vision_token_indices.view(-1)
+            ] = image_embeds_for_lm.flatten(0, 1)
+            inputs_embeds = inputs_embeds.view(*inputs_embeds_shape)
 
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
-        attention_mask = attention_mask.to(image_embeds_for_lm.dtype)
+        attention_mask = attention_mask.to(inputs_embeds.dtype)
 
         outputs = self.language_model.generate(
             inputs_embeds=inputs_embeds,

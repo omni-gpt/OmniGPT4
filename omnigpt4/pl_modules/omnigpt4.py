@@ -116,14 +116,14 @@ class OmniGPT4(pl.LightningModule):
         self,
         input_ids: torch.FloatTensor,
         pixel_values: Optional[torch.FloatTensor] = None,
-        vision_token_positions: Optional[torch.LongTensor] = None,  # TODO: find a better name
+        vision_token_indices: Optional[torch.LongTensor] = None,  # TODO: find a better name
         attention_mask: Optional[torch.LongTensor] = None,
         **generate_kwargs,
     ) -> torch.LongTensor:
         return self.model.generate(
             input_ids=input_ids,
             pixel_values=pixel_values,
-            vision_token_positions=vision_token_positions,
+            vision_token_indices=vision_token_indices,
             attention_mask=attention_mask,
             **generate_kwargs,
         )

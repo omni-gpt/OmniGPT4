@@ -1,5 +1,4 @@
 import time
-from typing import Any, Dict
 
 import ray
 from ray import serve
@@ -7,17 +6,19 @@ from ray.serve.dag import InputNode
 from ray.serve.drivers import DAGDriver
 from ray.serve.handle import RayServeDeploymentHandle
 from starlette.exceptions import HTTPException
-from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
 
-from omnigpt4.prompts import ChatPrompts, ChatPromptManager
+from omnigpt4.prompts import ChatPrompts
 from .models.chat_prompt_manager import ChatPromptManagerDeployment
 from .models.image_processor import ImageProcessorDeployment
+from .models.omnigpt4_model import OmniGPT4Deployment
 from .schemas import (
     ChatCompletionRequest,
     ChatCompletionResponse,
+    ChatMessage,
+    ChatResponse,
+    FinishReason,
+    Role,
     ModelMeta,
-    ModelMetaList,
     Usage,
 )
 
@@ -34,8 +35,13 @@ available_models = [
     ray_actor_options={"num_cpus": 4, "num_gpus": 1},
 )
 class MMChatIngress:
-    def __init__(self, chat_prompt_manager: RayServeDeploymentHandle) -> None:
+    def __init__(
+        self,
+        chat_prompt_manager: RayServeDeploymentHandle,
+        omnigpt4_model: RayServeDeploymentHandle,
+    ) -> None:
         self.chat_prompt_manager = chat_prompt_manager
+        self.omnigpt4_model = omnigpt4_model
 
     # def inference(self, prompt: str) -> str:
     #     return "ok"
@@ -76,18 +82,35 @@ class MMChatIngress:
         eos_token_id: int = ray.get(eos_token_id)
         chat_promps = ChatPrompts.collate([chat_promps], eos_token_id=eos_token_id)
 
-        if request.stream:
-            ...
-        else:
-            ...
+        outputs = await self.omnigpt4_model.generate.remote(
+            chat_promps,
+            max_length=max_length,
+            do_sample=True,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            num_return_sequences=request.n,
+        )
+        messages, num_completion_tokens = ray.get(outputs)
+
+        choices = [
+            ChatResponse(
+                index=i,
+                message=ChatMessage(
+                    role=Role.assistant,
+                    content=msg,
+                ),
+                finish_reason=FinishReason.stop,
+            )
+            for i, msg in enumerate(messages)
+        ]
 
         return ChatCompletionResponse(
             id="chat",
             created=int(time.time()),
-            choices=[],
+            choices=choices,
             usage=Usage(
-                prompt_tokens=10,
-                completion_tokens=20,
+                prompt_tokens=sum(chat_promps.num_tokens),
+                completion_tokens=sum(num_completion_tokens),
             )
         )
 
@@ -97,7 +120,9 @@ with InputNode() as request:
 
     chat_prompt_manager = ChatPromptManagerDeployment.bind(image_processor)
 
-    mmchat = MMChatIngress.bind(chat_prompt_manager)
+    omnigpt4_model = OmniGPT4Deployment.bind()
+
+    mmchat = MMChatIngress.bind(chat_prompt_manager, omnigpt4_model)
 
     rsp = mmchat.chat_completions.bind(request)
 

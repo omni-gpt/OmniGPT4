@@ -12,7 +12,7 @@ from PIL import Image
 from pydantic import BaseModel
 from torchvision import transforms as T
 from torchvision.transforms.functional import InterpolationMode
-from transformers import AutoTokenizer, BatchEncoding
+from transformers import AutoTokenizer, BatchEncoding, PreTrainedTokenizer
 
 from .prompt_store import PromptStore
 
@@ -35,6 +35,8 @@ class Message(BaseModel):
     extra_data: Optional[Dict[str, Any]] = None
 
     trainable: Optional[bool] = None
+
+    to_be_predicted: Optional[bool] = None
 
     def get_text(self, prompt_store: PromptStore) -> str:
         if self.tag == "text":
@@ -69,19 +71,30 @@ class ChatPrompts:
 
     target_ids: Optional[Union[torch.Tensor, np.ndarray]] = None
 
+    num_tokens: Union[int, List[int]] = 0
+
     is_batched: bool = False
+
+    def __post_init__(self):
+        if self.is_batched:
+            assert isinstance(self.num_tokens, list)
+        else:
+            assert isinstance(self.num_tokens, int)
 
     @classmethod
     def collate(
         cls,
         batch: List["ChatPrompts"],
         eos_token_id: int,
+        pad_to_multiple_of: int = 1,
     ) -> "ChatPrompts":
+        for data in batch:
+            assert not data.is_batched, "Cannot collate batched samples."
+
         batch_size = len(batch)
 
         max_input_ids = max(data.input_ids.shape[0] for data in batch)
-        # padding to multiple of 8
-        max_input_ids = (max_input_ids + 7) // 8 * 8
+        max_input_ids = (max_input_ids + (pad_to_multiple_of - 1)) // pad_to_multiple_of * pad_to_multiple_of
 
         if isinstance(batch[0].input_ids, np.ndarray):
             input_ids = np.full(
@@ -123,18 +136,13 @@ class ChatPrompts:
             vision_token_indices = None
 
         if batch[0].target_ids is not None:
-            max_target_ids = max(data.target_ids.shape[0] for data in batch)
-            # padding to multiple of 8
-            max_target_ids = (max_target_ids + 7) // 8 * 8
-            assert max_target_ids == max_input_ids
-
             if isinstance(batch[0].target_ids, np.ndarray):
                 target_ids = np.full(
-                    (batch_size, max_target_ids), fill_value=-100, dtype=np.long
+                    (batch_size, max_input_ids), fill_value=-100, dtype=np.long
                 )
             else:
                 target_ids = torch.full(
-                    (batch_size, max_target_ids), fill_value=-100, dtype=torch.long
+                    (batch_size, max_input_ids), fill_value=-100, dtype=torch.long
                 )
 
             for i, data in enumerate(batch):
@@ -148,6 +156,7 @@ class ChatPrompts:
             pixel_values=pixel_values,
             vision_token_indices=vision_token_indices,
             target_ids=target_ids,
+            num_tokens=[data.num_tokens for data in batch],
             is_batched=True,
         )
 
@@ -203,6 +212,8 @@ class ChatPromptManager:
 
     tokenizer_name_or_path: str = "bigscience/bloomz-7b1"
 
+    tokenizer: Optional[PreTrainedTokenizer] = None
+
     image_processor: Optional[ImageProcessor] = None
 
     num_tokens_per_image: int = 32
@@ -213,6 +224,16 @@ class ChatPromptManager:
         if self.image_processor is None:
             self.image_processor = ImageProcessor()
 
+        if self.tokenizer is None:
+            trust_remote_code = self.tokenizer_name_or_path in ["THUDM/chatglm-6b"]
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                self.tokenizer_name_or_path,
+                padding_side="left",
+                use_fast=False,
+                trust_remote_code=trust_remote_code,
+            )
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
     def copy(self) -> "ChatPromptManager":
         return ChatPromptManager(
             system_message=copy.copy(self.system_message),
@@ -221,23 +242,11 @@ class ChatPromptManager:
             conversations=copy.copy(self.conversations),
             conversation_template=self.conversation_template,
             tokenizer_name_or_path=self.tokenizer_name_or_path,
+            tokenizer=self.tokenizer,
             image_processor=self.image_processor,
             num_tokens_per_image=self.num_tokens_per_image,
             prompt_store=self.prompt_store,
         )
-
-    @property
-    def tokenizer(self):
-        if not hasattr(self, "_tokenizer"):
-            trust_remote_code = self.tokenizer_name_or_path in ["THUDM/chatglm-6b"]
-            self._tokenizer = AutoTokenizer.from_pretrained(
-                self.tokenizer_name_or_path,
-                use_fast=False,
-                trust_remote_code=trust_remote_code,
-            )
-            self._tokenizer.pad_token = self._tokenizer.eos_token
-
-        return self._tokenizer
 
     def text_processor(self, text: str) -> str:
         text = re.sub(
@@ -282,31 +291,43 @@ class ChatPromptManager:
         assert index >= 0, "conversation_template must contain '{assistant_text}'."
 
         template_1 = self.conversation_template[:index]
-        if template_1[-1] == " ":
-            template_1 = template_1[:-1]
+        text_1 = template_1.format(
+            human_name=self.human_name,
+            human_text=human_text,
+            assistant_name=self.assistant_name,
+            round=round,
+        )
+
+        # Remove trailing newline if assistant_text is empty
+        if not assistant_text:
+            text_1 = text_1.rstrip()
+
         message_1 = Message(
             tag="text",
-            text=template_1.format(
-                human_name=self.human_name,
-                human_text=human_text,
-                assistant_name=self.assistant_name,
-                round=round,
-            ),
+            text=text_1,
             extra_data=conversation.human.extra_data,
             trainable=False,
         )
 
-        template_2 = self.conversation_template[index:]
-        message_2 = Message(
-            tag="text",
-            text=template_2.format(
-                human_name=self.human_name,
-                assistant_name=self.assistant_name,
-                assistant_text=assistant_text,
-            ),
-            extra_data=conversation.assistant.extra_data,
-            trainable=not inference_mode,
-        )
+        if assistant_text:
+            template_2 = self.conversation_template[index:]
+            message_2 = Message(
+                tag="text",
+                text=template_2.format(
+                    human_name=self.human_name,
+                    assistant_name=self.assistant_name,
+                    assistant_text=assistant_text,
+                ),
+                extra_data=conversation.assistant.extra_data,
+                trainable=not inference_mode,
+            )
+        else:
+            message_2 = Message(
+                tag="text",
+                text="",
+                trainable=False,
+                to_be_predicted=True,
+            )
 
         return message_1, message_2
 
@@ -334,14 +355,17 @@ class ChatPromptManager:
 
         text = message.get_text(self.prompt_store)
 
+        if len(text) == 0:
+            return 0
+
         num_remaining_tokens = max_length
 
-        text_pieces = re.split("(\<\|ref\_\w+\_\d+\|\>)", text, flags=re.I)
+        text_pieces = re.split("(\<\|ref\_\w+\_[a-z0-9]+\|\>)", text, flags=re.I)
         for text_piece in text_pieces:
             if num_remaining_tokens <= 0:
                 break
 
-            m = re.match("^\<\|ref\_((\w+)\_\d+)\|\>$", text_piece, flags=re.I)
+            m = re.match("^\<\|ref\_((\w+)\_[a-z0-9]+)\|\>$", text_piece, flags=re.I)
             if m:
                 ref_key = m[1]
                 ref_type = m[2]
@@ -363,7 +387,7 @@ class ChatPromptManager:
                     if isinstance(ref_obj, Image.Image):
                         pixel_values.append(self.image_processor(ref_obj))
                     else:
-                        pixel_values.append(torch.from_numpy(ref_obj))
+                        pixel_values.append(torch.from_numpy(ref_obj.copy()))
                     start_index = len(input_ids)
                     vision_token_indices.append([start_index + i for i in range(self.num_tokens_per_image)])
 
@@ -410,9 +434,7 @@ class ChatPromptManager:
         if isinstance(conversations[0], dict):
             conversations = self.parse_conversations(conversations)
 
-        tokenizer = self.tokenizer
-
-        input_ids = [tokenizer.bos_token_id]
+        input_ids = [self.tokenizer.bos_token_id]
         pixel_values = []
         vision_token_indices = []
         target_ids = None if inference else [-100]
@@ -434,8 +456,13 @@ class ChatPromptManager:
                 trainable=False,
             )
 
-        for i, conversation in enumerate(self.conversations + conversations):
+        all_conversations = self.conversations + conversations
+        for i, conversation in enumerate(all_conversations):
             message_1, message_2 = self.format_conversation(conversation, round=i)
+            if message_2.to_be_predicted:
+                assert i == len(all_conversations) - 1, (
+                    "Only the last message of the last conversation can be to_be_predicted."
+                )
             num_remaining_tokens -= tokenize_and_append(
                 message_1, max_length=num_remaining_tokens
             )
@@ -478,4 +505,5 @@ class ChatPromptManager:
             pixel_values=pixel_values,
             vision_token_indices=vision_token_indices,
             target_ids=target_ids,
+            num_tokens=input_ids.shape[0],
         )
