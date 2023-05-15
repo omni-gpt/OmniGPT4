@@ -43,25 +43,6 @@ class MMChatIngress:
         self.chat_prompt_manager = chat_prompt_manager
         self.omnigpt4_model = omnigpt4_model
 
-    # def inference(self, prompt: str) -> str:
-    #     return "ok"
-
-    # @app.get("/")
-    # async def home(self) -> str:
-    #     return "ok"
-
-    # @app.get("/v1/models")
-    # async def get_models(self) -> ModelMetaList:
-    #     return ModelMetaList(data=available_models)
-
-    # @app.get("/v1/models/{model_id}")
-    # async def get_model(self, model_id: str) -> ModelMeta:
-    #     for model in available_models:
-    #         if model_id == model.id:
-    #             return model
-
-    #     raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
-
     async def chat_completions(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         if request.model not in ["omnigpt4"]:
             raise HTTPException(status_code=404, detail=f"Model {request.model} not found")
@@ -97,7 +78,7 @@ class MMChatIngress:
                 index=i,
                 message=ChatMessage(
                     role=Role.assistant,
-                    content=msg,
+                    content=msg.rstrip("###"),
                 ),
                 finish_reason=FinishReason.stop,
             )
@@ -126,4 +107,7 @@ with InputNode() as request:
 
     rsp = mmchat.chat_completions.bind(request)
 
-    ingress = DAGDriver.options(route_prefix="/v1/chat/completions").bind(rsp, http_adapter=ChatCompletionRequest)
+    ingress = DAGDriver.options().bind(
+        {"/v1/chat/completions": rsp},
+        http_adapter=ChatCompletionRequest,
+    )

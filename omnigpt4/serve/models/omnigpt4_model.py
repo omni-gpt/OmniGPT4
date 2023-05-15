@@ -2,10 +2,25 @@ from typing import List, Tuple, Optional
 
 import torch
 from ray import serve
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 
 from omnigpt4.pl_modules.omnigpt4 import OmniGPT4
 from omnigpt4.prompts import ChatPrompts
+
+
+class StopOnTokens(StoppingCriteria):
+    def __init__(self, stop_ids_list: List[List[int]]) -> None:
+        super().__init__()
+
+        self.stop_ids_list = torch.as_tensor(stop_ids_list, dtype=torch.long)
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+        self.stop_ids_list = self.stop_ids_list.to(input_ids.device)
+
+        for stop_ids in self.stop_ids_list:
+            if torch.all(stop_ids == input_ids[0][-stop_ids.shape[0] :]).item():
+                return True
+        return False
 
 
 @serve.deployment(
@@ -31,6 +46,7 @@ class OmniGPT4Deployment:
             padding_side="left",
         )
         self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.stopping_criteria = StoppingCriteriaList([StopOnTokens([[105311], [237401]])])
 
     def generate(
         self,
@@ -94,6 +110,7 @@ class OmniGPT4Deployment:
             length_penalty=length_penalty,
             no_repeat_ngram_size=no_repeat_ngram_size,
             num_return_sequences=num_return_sequences,
+            stopping_criteria=self.stopping_criteria,
         )
 
         num_tokens = [output.shape[0] for output in outputs]
