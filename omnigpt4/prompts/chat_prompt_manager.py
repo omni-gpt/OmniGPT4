@@ -98,7 +98,7 @@ class ChatPrompts:
 
         if isinstance(batch[0].input_ids, np.ndarray):
             input_ids = np.full(
-                (batch_size, max_input_ids), fill_value=eos_token_id, dtype=np.long
+                (batch_size, max_input_ids), fill_value=eos_token_id, dtype=np.int64
             )
             attention_masks = np.zeros_like(input_ids)
         else:
@@ -138,7 +138,7 @@ class ChatPrompts:
         if batch[0].target_ids is not None:
             if isinstance(batch[0].target_ids, np.ndarray):
                 target_ids = np.full(
-                    (batch_size, max_input_ids), fill_value=-100, dtype=np.long
+                    (batch_size, max_input_ids), fill_value=-100, dtype=np.int64
                 )
             else:
                 target_ids = torch.full(
@@ -470,18 +470,18 @@ class ChatPromptManager:
                 message_2, max_length=num_remaining_tokens
             )
 
-        input_ids = np.asarray(input_ids, dtype=np.long)
-        attention_mask = np.ones_like(input_ids, dtype=np.bool)
+        input_ids = np.asarray(input_ids, dtype=np.int64)
+        attention_mask = np.ones_like(input_ids, dtype=np.int64)
 
         if len(pixel_values) > 0:
             pixel_values = np.stack(pixel_values, axis=0)
-            vision_token_indices = np.asarray(vision_token_indices, dtype=np.long)
+            vision_token_indices = np.asarray(vision_token_indices, dtype=np.int64)
         else:
             pixel_values = None
             vision_token_indices = None
 
         if target_ids is not None:
-            target_ids = np.asarray(target_ids, dtype=np.long)
+            target_ids = np.asarray(target_ids, dtype=np.int64)
 
         # To tensor
         if return_tensors == "pt":
