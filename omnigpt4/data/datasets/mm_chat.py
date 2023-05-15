@@ -39,6 +39,7 @@ def build_mm_chat_pipeline(
             conversations=conversations,
             max_length=max_length,
             inference=inference_mode,
+            return_tensors="pt",
         )
 
         return res
