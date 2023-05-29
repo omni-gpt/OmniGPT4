@@ -12,10 +12,16 @@ class StopOnTokens(StoppingCriteria):
     def __init__(self, stop_ids_list: List[List[int]]) -> None:
         super().__init__()
 
-        self.stop_ids_list = torch.as_tensor(stop_ids_list, dtype=torch.long)
+        self.stop_ids_list = [
+            torch.LongTensor(stop_ids)
+            for stop_ids in stop_ids_list
+        ]
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        self.stop_ids_list = self.stop_ids_list.to(input_ids.device)
+        self.stop_ids_list = [
+            stop_ids.to(input_ids.device)
+            for stop_ids in self.stop_ids_list
+        ]
 
         for stop_ids in self.stop_ids_list:
             if torch.all(stop_ids == input_ids[0][-stop_ids.shape[0] :]).item():
@@ -33,20 +39,24 @@ class OmniGPT4Deployment:
 
         self.model = OmniGPT4(
             visual_model_name_or_path="Salesforce/blip2-flan-t5-xxl",
-            language_model_name_or_path="bigscience/bloomz-7b1",
-            language_projection_weight_path="./weights/blip2_bloomz_7b1_stage_2_cpp20tmc_00004000.safetensors",
+            # language_model_name_or_path="bigscience/bloomz-7b1",
+            language_model_name_or_path="./weights/vicuna-13b-v0",
+            # language_projection_weight_path="./weights/blip2_bloomz_7b1_stage_2_cpp20tmc_00004000.safetensors",
+            language_projection_weight_path="./weights/minigpt4_13b.safetensors",
             cache_dir=".cache",
         )
         self.model.eval()
         self.model.to(self.device)
 
         self.tokenizer = AutoTokenizer.from_pretrained(
-            "bigscience/bloomz-7b1",
+            # "bigscience/bloomz-7b1",
+            "./weights/vicuna-13b-v0",
             use_fast=False,
             padding_side="left",
         )
         self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.stopping_criteria = StoppingCriteriaList([StopOnTokens([[105311], [237401]])])
+        # self.stopping_criteria = StoppingCriteriaList([StopOnTokens([[105311], [237401]])])
+        self.stopping_criteria = StoppingCriteriaList([StopOnTokens([[835], [2277, 29937]])])
 
     def generate(
         self,
@@ -86,32 +96,33 @@ class OmniGPT4Deployment:
         attention_mask = torch.from_numpy(prompts.attention_mask.copy())
         attention_mask = attention_mask.to(self.device, non_blocking=True)
 
-        outputs = self.model.generate(
-            input_ids=input_ids,
-            pixel_values=pixel_values,
-            vision_token_indices=vision_token_indices,
-            attention_mask=attention_mask,
-            max_length=max_length,
-            max_new_tokens=max_new_tokens,
-            max_time=max_time,
-            do_sample=do_sample,
-            num_beams=num_beams,
-            num_beam_groups=num_beam_groups,
-            penalty_alpha=penalty_alpha,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
-            typical_p=typical_p,
-            epsilon_cutoff=epsilon_cutoff,
-            eta_cutoff=eta_cutoff,
-            diversity_penalty=diversity_penalty,
-            repetition_penalty=repetition_penalty,
-            encoder_repetition_penalty=encoder_repetition_penalty,
-            length_penalty=length_penalty,
-            no_repeat_ngram_size=no_repeat_ngram_size,
-            num_return_sequences=num_return_sequences,
-            stopping_criteria=self.stopping_criteria,
-        )
+        with torch.autocast("cuda"):
+            outputs = self.model.generate(
+                input_ids=input_ids,
+                pixel_values=pixel_values,
+                vision_token_indices=vision_token_indices,
+                attention_mask=attention_mask,
+                max_length=max_length,
+                max_new_tokens=max_new_tokens,
+                max_time=max_time,
+                do_sample=do_sample,
+                num_beams=num_beams,
+                num_beam_groups=num_beam_groups,
+                penalty_alpha=penalty_alpha,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                typical_p=typical_p,
+                epsilon_cutoff=epsilon_cutoff,
+                eta_cutoff=eta_cutoff,
+                diversity_penalty=diversity_penalty,
+                repetition_penalty=repetition_penalty,
+                encoder_repetition_penalty=encoder_repetition_penalty,
+                length_penalty=length_penalty,
+                no_repeat_ngram_size=no_repeat_ngram_size,
+                num_return_sequences=num_return_sequences,
+                stopping_criteria=self.stopping_criteria,
+            )
 
         num_tokens = [output.shape[0] for output in outputs]
 

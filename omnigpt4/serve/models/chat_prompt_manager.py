@@ -1,4 +1,3 @@
-import asyncio
 import re
 from typing import List
 
@@ -28,7 +27,8 @@ class ChatPromptManagerDeployment:
         self.chat_prompt_manager = ChatPromptManager(
             human_name="Human",
             assistant_name="Assistant",
-            tokenizer_name_or_path="bigscience/bloomz-7b1",
+            # tokenizer_name_or_path="bigscience/bloomz-7b1",
+            tokenizer_name_or_path="./weights/vicuna-13b-v0",
         )
         self.image_processor = image_processor
 

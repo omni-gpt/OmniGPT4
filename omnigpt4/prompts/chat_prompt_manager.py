@@ -108,8 +108,8 @@ class ChatPrompts:
             attention_masks = torch.zeros_like(input_ids)
 
         for i, data in enumerate(batch):
-            input_ids[i, : data.input_ids.shape[0]] = data.input_ids
-            attention_masks[i, : data.input_ids.shape[0]] = data.attention_mask
+            input_ids[i, -data.input_ids.shape[0]:] = data.input_ids
+            attention_masks[i, -data.input_ids.shape[0]:] = data.attention_mask
 
         pixel_values = []
         vision_token_indices = []
@@ -121,7 +121,9 @@ class ChatPrompts:
                     "Vision token indices must be provided if pixel values are provided."
                 )
                 pixel_values.append(data.pixel_values)
-                vision_token_indices.append(data.vision_token_indices + offset)
+                vision_token_indices.append(
+                    data.vision_token_indices + offset + max_input_ids - data.input_ids.shape[0]
+                )
                 offset += max_input_ids
 
         if len(pixel_values) > 0:
@@ -146,7 +148,7 @@ class ChatPrompts:
                 )
 
             for i, data in enumerate(batch):
-                target_ids[i, :data.target_ids.shape[0]] = data.target_ids
+                target_ids[i, -data.target_ids.shape[0]:] = data.target_ids
         else:
             target_ids = None
 
@@ -208,7 +210,7 @@ class ChatPromptManager:
     # Few shot examples
     conversations: List[Conversation] = field(default_factory=list)
 
-    conversation_template: str = "{human_name}: {human_text} ###\n{assistant_name}: {assistant_text} ###\n"
+    conversation_template: str = "### {human_name}: {human_text}\n### {assistant_name}: {assistant_text}\n"
 
     tokenizer_name_or_path: str = "bigscience/bloomz-7b1"
 
@@ -283,53 +285,75 @@ class ChatPromptManager:
         conversation: Conversation,
         round: int,
         inference_mode: bool = False,
-    ) -> Tuple[Message, Message]:
+    ) -> Union[Message, Tuple[Message, Message]]:
         human_text = conversation.human.get_text(self.prompt_store)
         assistant_text = conversation.assistant.get_text(self.prompt_store)
 
-        index = self.conversation_template.find("{assistant_text}")
-        assert index >= 0, "conversation_template must contain '{assistant_text}'."
-
-        template_1 = self.conversation_template[:index]
-        text_1 = template_1.format(
-            human_name=self.human_name,
-            human_text=human_text,
-            assistant_name=self.assistant_name,
-            round=round,
-        )
-
-        # Remove trailing newline if assistant_text is empty
-        if not assistant_text:
-            text_1 = text_1.rstrip()
-
-        message_1 = Message(
-            tag="text",
-            text=text_1,
-            extra_data=conversation.human.extra_data,
-            trainable=False,
-        )
-
+        # TODO: add to_be_predicted to Conversation Message
+        # TODO: take care duplicate extra_data keys
+        # TDOO: split into two message (for training stage)
         if assistant_text:
-            template_2 = self.conversation_template[index:]
-            message_2 = Message(
+            extra_data = {}
+            if conversation.human.extra_data:
+                extra_data.update(conversation.human.extra_data)
+            if conversation.assistant.extra_data:
+                extra_data.update(conversation.assistant.extra_data)
+
+            return Message(
                 tag="text",
-                text=template_2.format(
+                text=self.conversation_template.format(
                     human_name=self.human_name,
+                    human_text=human_text,
                     assistant_name=self.assistant_name,
                     assistant_text=assistant_text,
+                    round=round,
                 ),
-                extra_data=conversation.assistant.extra_data,
-                trainable=not inference_mode,
+                extra_data=extra_data,
+                trainable=False,
             )
         else:
-            message_2 = Message(
-                tag="text",
-                text="",
-                trainable=False,
-                to_be_predicted=True,
+            index = self.conversation_template.find("{assistant_text}")
+            assert index >= 0, "conversation_template must contain '{assistant_text}'."
+
+            template_1 = self.conversation_template[:index]
+            text_1 = template_1.format(
+                human_name=self.human_name,
+                human_text=human_text,
+                assistant_name=self.assistant_name,
+                round=round,
             )
 
-        return message_1, message_2
+            # Remove trailing newline if assistant_text is empty
+            text_1 = text_1.rstrip()
+
+            message_1 = Message(
+                tag="text",
+                text=text_1,
+                extra_data=conversation.human.extra_data,
+                trainable=False,
+            )
+
+            if assistant_text:
+                template_2 = self.conversation_template[index:]
+                message_2 = Message(
+                    tag="text",
+                    text=template_2.format(
+                        human_name=self.human_name,
+                        assistant_name=self.assistant_name,
+                        assistant_text=assistant_text,
+                    ),
+                    extra_data=conversation.assistant.extra_data,
+                    trainable=not inference_mode,
+                )
+            else:
+                message_2 = Message(
+                    tag="text",
+                    text="",
+                    trainable=False,
+                    to_be_predicted=True,
+                )
+
+            return message_1, message_2
 
     def tokenize_and_append(
         self,
@@ -458,17 +482,23 @@ class ChatPromptManager:
 
         all_conversations = self.conversations + conversations
         for i, conversation in enumerate(all_conversations):
-            message_1, message_2 = self.format_conversation(conversation, round=i)
-            if message_2.to_be_predicted:
-                assert i == len(all_conversations) - 1, (
-                    "Only the last message of the last conversation can be to_be_predicted."
+            message = self.format_conversation(conversation, round=i)
+            if isinstance(message, Message):
+                num_remaining_tokens -= tokenize_and_append(
+                    message, max_length=num_remaining_tokens
                 )
-            num_remaining_tokens -= tokenize_and_append(
-                message_1, max_length=num_remaining_tokens
-            )
-            num_remaining_tokens -= tokenize_and_append(
-                message_2, max_length=num_remaining_tokens
-            )
+            else:
+                message_1, message_2 = message
+                if message_2.to_be_predicted:
+                    assert i == len(all_conversations) - 1, (
+                        "Only the last message of the last conversation can be to_be_predicted."
+                    )
+                num_remaining_tokens -= tokenize_and_append(
+                    message_1, max_length=num_remaining_tokens
+                )
+                num_remaining_tokens -= tokenize_and_append(
+                    message_2, max_length=num_remaining_tokens
+                )
 
         input_ids = np.asarray(input_ids, dtype=np.int64)
         attention_mask = np.ones_like(input_ids, dtype=np.int64)

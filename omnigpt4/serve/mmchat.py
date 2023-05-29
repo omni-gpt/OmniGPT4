@@ -32,7 +32,7 @@ available_models = [
 
 @serve.deployment(
     num_replicas=1,
-    ray_actor_options={"num_cpus": 4, "num_gpus": 1},
+    ray_actor_options={"num_cpus": 4, "num_gpus": 0},
 )
 class MMChatIngress:
     def __init__(
@@ -48,8 +48,8 @@ class MMChatIngress:
             raise HTTPException(status_code=404, detail=f"Model {request.model} not found")
 
         max_length = request.max_tokens
-        if max_length > 4096:
-            max_length = 4096
+        if max_length > 2048:
+            max_length = 2048
 
         try:
             chat_promps = await self.chat_prompt_manager.get_prompt.remote(
@@ -61,7 +61,9 @@ class MMChatIngress:
 
         chat_promps: ChatPrompts = ray.get(chat_promps)
         eos_token_id: int = ray.get(eos_token_id)
-        chat_promps = ChatPrompts.collate([chat_promps], eos_token_id=eos_token_id)
+        chat_promps = ChatPrompts.collate(
+            [chat_promps], eos_token_id=eos_token_id, pad_to_multiple_of=1
+        )
 
         outputs = await self.omnigpt4_model.generate.remote(
             chat_promps,

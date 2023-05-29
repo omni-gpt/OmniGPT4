@@ -195,7 +195,7 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
         super().__init__(config)
 
         with no_init():
-            self.vision_model = Blip2VisionModel(config.vision_config)
+            self.vision_model = Blip2VisionModel(config.vision_config).half()
 
         with no_init():
             self.query_tokens = nn.Parameter(
@@ -210,6 +210,7 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
             self.language_model: PreTrainedModel = AutoModelForCausalLM.from_config(
                 config.text_config,
                 trust_remote_code=trust_remote_code,
+                torch_dtype=torch.float16,
             )
             self.language_model.tie_weights()
 
@@ -236,7 +237,8 @@ class OmniGPT4Model(OmniGPT4PreTrainedModel):
                 revision=revision,
             ),
         )
-        config.vision_config.layer_norm_eps = 1e-6  # following the original EVA-ViT config
+        if isinstance(config.vision_config, Blip2VisionConfig):
+            config.vision_config.layer_norm_eps = 1e-6  # following the original EVA-ViT config
 
         if cache_dir is None:
             cache_dir = Path.home() / ".cache" / "omnigpt4"
